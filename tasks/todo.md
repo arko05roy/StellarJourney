@@ -2359,8 +2359,8 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] Fetch remote refs and inspect divergence from `main`.
 - [x] Run lint, typecheck, unit/integration tests, builds, E2E, Rust checks, and repository audits.
 - [x] Fix any failures at their root and rerun affected/full checks.
-- [ ] Commit the completed gate, merge production readiness into current `main`, and push.
-- [ ] Verify remote `main` contains the merge and the worktree is clean.
+- [x] Commit the completed gate, merge production readiness into current `main`, and push.
+- [x] Verify remote `main` contains the merge and the worktree is clean.
 
 ### Verification
 
@@ -2400,12 +2400,11 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 #### Risks
 
-- The production-readiness branch is 17 commits ahead of `origin/main`; remote main had no unique
-  commits when the gate began.
+- None known. Remote `main` had no divergent commits, and the merge completed without conflicts.
 
 #### Follow-ups
 
-- Merge and verify remote `main`.
+- None.
 
 ---
 
