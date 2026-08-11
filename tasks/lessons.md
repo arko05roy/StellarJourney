@@ -1,5 +1,12 @@
 # Lessons
 
+## CI environment parity
+
+- Mistake: local web builds inherited an ignored `.env.local`, so the release gate missed a
+  required public build variable absent from GitHub Actions.
+- Rule: verify production builds with required environment variables supplied explicitly by CI;
+  never treat ignored local env files as proof that a clean checkout builds.
+
 ## Merchant authentication
 
 - Mistake: used a merchant API key as the human dashboard login and accepted a typed payout

@@ -43,6 +43,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/paymap?schema=public
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:3001
       REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4

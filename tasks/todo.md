@@ -2352,6 +2352,53 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 ---
 
+## Phase 23 - Main Branch CI Repair
+
+### Plan
+
+- [x] Inspect the failing GitHub Actions run on `main`.
+- [x] Reproduce the failed web build with the CI environment.
+- [x] Add the missing non-secret web build configuration to CI.
+- [x] Run the affected local gates and inspect the diff.
+- [ ] Commit and push the fix to `main`.
+- [ ] Verify the new GitHub Actions run passes.
+
+### Verification
+
+- [x] `NEXT_PUBLIC_API_URL=http://127.0.0.1:3001 pnpm build`
+- [x] `pnpm lint`
+- [x] `git diff --check`
+- [ ] GitHub Actions `CI` succeeds on `main`
+
+### Files likely touched
+
+- `.github/workflows/ci.yml`
+- `tasks/todo.md`
+- `tasks/lessons.md`
+
+### Review
+
+#### Changed
+
+- Added an explicit non-secret API URL to the Node CI job so Next.js can validate and compile the
+  frontend from a clean checkout.
+
+#### Verified
+
+- Reproduced the build failure with an empty API URL.
+- The full workspace build passes with the CI API URL, and lint plus diff checks pass.
+
+#### Risks
+
+- The CI URL is build-time configuration only; CI does not exercise a live frontend-to-API request
+  during `next build`.
+
+#### Follow-ups
+
+- Confirm the pushed GitHub Actions run is green.
+
+---
+
 ## Phase 22 - Main Branch Release Gate
 
 ### Plan
