@@ -6,6 +6,10 @@
   required public build variable absent from GitHub Actions.
 - Rule: verify production builds with required environment variables supplied explicitly by CI;
   never treat ignored local env files as proof that a clean checkout builds.
+- Mistake: CI defined database and Redis variables at the job level, but Turbo strict mode removed
+  them from package test processes.
+- Rule: declare runtime variables used by Turbo tasks in `globalEnv` (or task `env`) and inspect
+  `turbo --dry=json` when a child process cannot see a workflow variable.
 
 ## Merchant authentication
 

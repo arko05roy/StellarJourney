@@ -2360,19 +2360,24 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] Reproduce the failed web build with the CI environment.
 - [x] Add the missing non-secret web build configuration to CI.
 - [x] Run the affected local gates and inspect the diff.
-- [ ] Commit and push the fix to `main`.
+- [x] Commit and push the web-build fix to `main`.
+- [x] Pass CI database and Redis configuration through Turbo strict mode.
+- [x] Run the full Node test gate with CI-equivalent variables.
+- [ ] Commit and push the test-environment fix to `main`.
 - [ ] Verify the new GitHub Actions run passes.
 
 ### Verification
 
 - [x] `NEXT_PUBLIC_API_URL=http://127.0.0.1:3001 pnpm build`
 - [x] `pnpm lint`
+- [x] CI-equivalent `pnpm test`
 - [x] `git diff --check`
 - [ ] GitHub Actions `CI` succeeds on `main`
 
 ### Files likely touched
 
 - `.github/workflows/ci.yml`
+- `turbo.json`
 - `tasks/todo.md`
 - `tasks/lessons.md`
 
@@ -2382,11 +2387,17 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 - Added an explicit non-secret API URL to the Node CI job so Next.js can validate and compile the
   frontend from a clean checkout.
+- Declared database and Redis variables as Turbo global task inputs so strict environment filtering
+  preserves them for integration tests.
 
 #### Verified
 
 - Reproduced the build failure with an empty API URL.
 - The full workspace build passes with the CI API URL, and lint plus diff checks pass.
+- The first repair run passed Rust, Node lint, typecheck, and build, then exposed Turbo stripping
+  `DATABASE_URL` before API tests.
+- Turbo dry-run reports hashed database and Redis inputs, and all 640 Node tests pass with
+  CI-equivalent variables against local Postgres and Redis.
 
 #### Risks
 
@@ -2395,7 +2406,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 #### Follow-ups
 
-- Confirm the pushed GitHub Actions run is green.
+- Run the CI-equivalent test command and confirm the next pushed GitHub Actions run is green.
 
 ---
 
