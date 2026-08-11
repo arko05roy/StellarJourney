@@ -11,6 +11,7 @@ Recurring stablecoin payments with limits enforced by a Soroban contract. Payers
 | Live API                    | <https://paymap-demo-api.onrender.com/readyz>                                                        |
 | Pitch deck                  | [`docs/level-5/Paymap-Level-5-Pitch-Deck.pptx`](docs/level-5/Paymap-Level-5-Pitch-Deck.pptx)         |
 | Feedback workbook           | [`docs/level-5/Paymap-User-Feedback-Analysis.xlsx`](docs/level-5/Paymap-User-Feedback-Analysis.xlsx) |
+| Testnet transaction CSV     | [`52 verified transactions`](docs/level-5/evidence/testnet-stress-20260730045306-585217.csv)         |
 | Google Form specification   | [`docs/level-5/google-form-spec.md`](docs/level-5/google-form-spec.md)                               |
 | Submission evidence tracker | [`docs/level-5/submission-evidence.md`](docs/level-5/submission-evidence.md)                         |
 | Demo walkthrough            | Script ready in [`docs/demo-script.md`](docs/demo-script.md); public video link pending              |
