@@ -6,14 +6,25 @@
   "main": "./dist/index.js",
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json",
-    "test": "echo \"no tests yet\" && exit 0"
+    "typecheck": "pnpm run db:generate && tsc -p tsconfig.json --noEmit",
+    "build": "pnpm run db:generate && tsc -p tsconfig.json",
+    "test": "export DATABASE_URL=\"postgresql://postgres:postgres@localhost:5432/paymap?schema=relayer_test\" && prisma migrate deploy --schema ../../prisma/schema.prisma && pnpm run db:generate && vitest run",
+    "db:generate": "prisma generate --schema ../../prisma/schema.prisma"
   },
   "dependencies": {
-    "@paymap/config": "workspace:*"
+    "@paymap/api": "workspace:*",
+    "@paymap/config": "workspace:*",
+    "@paymap/contract-client": "workspace:*",
+    "@paymap/shared": "workspace:*",
+    "@paymap/stellar": "workspace:*",
+    "@prisma/client": "^6.19.3",
+    "bullmq": "^5.34.5",
+    "ioredis": "^5.4.2"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5"
+    "@stellar/stellar-sdk": "^16.1.0",
+    "@types/node": "^22.10.5",
+    "prisma": "^6.19.3",
+    "vitest": "^2.1.8"
   }
 }

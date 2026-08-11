@@ -226,6 +226,12 @@ model ChargeRequest {
   attemptCount    Int                 @default(0)
   failureCode     String?
   transactionHash String?
+  /// Phase 9 (relayer): when a `retryable_failed` attempt should be retried
+  /// next (PLAN.md §15 retry schedule: +6h, +24h, +72h, then
+  /// `permanently_failed`). Null for every other status, including
+  /// `permanently_failed` (schedule exhausted, or the failure was
+  /// deterministic and never had a next attempt).
+  nextAttemptAt   DateTime?
   createdAt       DateTime            @default(now())
   updatedAt       DateTime            @updatedAt
 
@@ -234,6 +240,7 @@ model ChargeRequest {
   @@index([merchantId])
   @@index([mandateId])
   @@index([status])
+  @@index([nextAttemptAt])
 }
 
 /// Written only from a confirmed on-chain result (Phase 9's relayer) —

@@ -128,3 +128,121 @@ silently misclassify real failures in production.
 integer-base-unit (on-chain, `bigint`) amounts convert between each other (CLAUDE.md §9). Every
 classic-asset SAC uses exactly 7 decimals; the conversion functions themselves are asset-agnostic
 and take `decimals` as a parameter. Over-precision input is rejected outright, never rounded.
+
+---
+
+## Phase 9 — Relayer (`apps/relayer`)
+
+The relayer executes transactions; it has **zero policy authority and zero spending authority**
+(CLAUDE.md §11, PLAN.md §15). Every rule that matters — amount limits, timing, state — is enforced
+by the contract, not trusted from the relayer's own judgment. This phase's job was to make that
+structural, not conventional: even a buggy or fully compromised relayer process cannot make a
+different charge succeed than the one the merchant's `ChargeRequest` actually described.
+
+### Pipeline (`src/pipeline.ts::processChargeRequest`)
+
+```text
+1. Claim         guarded DB transition  scheduled|retryable_failed -> processing
+2. Fresh read    ChainGateway.getMandate(mandateId)         (never the DB's MandateIndex cache)
+3. Build+simulate ChainGateway.prepareCharge(args)           (AssembledTransaction simulates on construction)
+4. Classify      a rejected simulation -> classify.ts -> permanent | transient, before any signature
+5. Verify        simulated receipt vs. ChargeRequest + its Merchant/Product — merchant, asset,
+                 amount, charge_id, mandate_id, invoice_hash. Any mismatch -> hard failure, never a
+                 retry (SIMULATION_MISMATCH) — submit() is never called.
+6. Submit        processing -> simulated -> submitted, then PreparedCharge.submit() once
+7. Poll to final `submit()` blocks until a final on-chain result — the SDK's
+                 `AssembledTransaction.signAndSend()` already polls `getTransaction` internally
+                 (`SentTransaction.send()`, up to 5 minutes) rather than this app re-implementing
+                 that loop.
+8. Reconcile     on success: Payment row + `succeeded` transition, ONE Postgres transaction —
+                 Payment is written only from the confirmed final Result, never from the
+                 pre-submission simulation.
+9. Classify      on failure: retryable_failed (+ nextAttemptAt) or permanently_failed
+10. Webhook      enqueue a `pending` WebhookDelivery row either way (delivery itself is Phase 12)
+```
+
+### The `ChainGateway` seam (`src/chain-gateway.ts`)
+
+`pipeline.ts` depends only on a narrow `ChainGateway` interface (`getMandate`, `prepareCharge` ->
+`PreparedCharge { simulated, submit() }`) — never on `@paymap/contract-client`/`@paymap/stellar`
+directly. Mirrors `apps/api/src/chain/mandate-reader.ts`'s established pattern. Every Postgres
+integration test in this app runs against a deterministic in-memory `FakeChainGateway`
+(`src/test/helpers.ts`) — no live Soroban RPC in the default `pnpm test` run; the production
+`createSorobanChainGateway` is a thin wrapper proven once against real testnet (see "Real-testnet
+proof" below).
+
+### Failure classification (`src/classify.ts`)
+
+One table, two input universes:
+
+- **Contract errors** (all 24 frozen codes, `contracts/mandate-registry/src/error.rs`) — consumes
+  `packages/stellar`'s own `retryable` flag rather than re-deriving it (that flag is itself
+  drift-tested against the Rust source). An error name outside the frozen table throws
+  `UnclassifiableContractError` instead of silently defaulting to a retry.
+- **Infra conditions** the relayer itself observes and that never produce a contract error at all:
+  `RPC_UNAVAILABLE`, `SEND_FAILED`, `TX_NOT_INCLUDED` — always transient.
+
+| Contract error | Class | Contract error | Class |
+| --- | --- | --- | --- |
+| MandateNotFound | permanent | InsufficientAllowance | **transient** |
+| MandateNotActive | permanent | InsufficientBalance | **transient** |
+| MandatePaused | permanent | PaymentNotFound | permanent |
+| MandateRevoked | permanent | RefundExceedsPayment | permanent |
+| MandateCompleted | permanent | DuplicateRefund | permanent |
+| MandateExpired | permanent | ArithmeticOverflow | permanent |
+| ChargeBeforeStart | permanent | InvalidMandateInput | permanent |
+| ChargeTooSoon | permanent | DuplicateMandate | permanent |
+| InvalidAmount | permanent | InvalidStateTransition | permanent |
+| AmountExceedsChargeLimit | permanent | RefundNotFound | permanent |
+| AmountExceedsPeriodLimit | permanent | | |
+| ChargeCountExceeded | permanent | | |
+| DuplicateCharge | permanent | | |
+| UnauthorizedMerchant | permanent | | |
+
+### Retry schedule (`src/retry-schedule.ts`)
+
+PLAN.md §15: attempt 1 at scheduled time, then +6h, +24h, +72h, then `permanently_failed`.
+`nextRetryAt(attemptCount, from)` returns `undefined` once exhausted.
+
+### At-most-one-success under duplicate delivery (decision #2)
+
+BullMQ's deterministic job id (`chargeRequest.id`, `src/queue.ts`) collapses duplicate *enqueues*,
+but the system does not rely on BullMQ's own job locking for correctness. The actual guarantee is
+the DB-guarded `scheduled|retryable_failed -> processing` transition
+(`apps/api/src/state-machine.ts::transitionChargeRequest`, reused verbatim, not re-implemented): a
+guarded `updateMany` scoped to the expected current status, so a second concurrent caller's
+`updateMany` matches zero rows the instant the first commits, and returns
+`skipped_not_claimable` having made **zero** chain calls. Proven with two independent Prisma
+connections (simulating two separate worker processes) racing `processChargeRequest` on the same
+`ChargeRequest` id against a real Postgres — see `src/pipeline.test.ts`'s "duplicate job delivery"
+suite.
+
+### Scheduler (`src/scheduler.ts`)
+
+Finds `scheduled` rows past `scheduledFor` and `retryable_failed` rows past `nextAttemptAt`,
+enqueues both with the deterministic job id. Safe to run from multiple relayer processes at once —
+BullMQ dedupes the enqueue, and the pipeline's DB claim is the real backstop regardless.
+
+### The one open trust-model question this phase surfaces
+
+`contracts/mandate-registry/src/charge.rs` requires `mandate.merchant.require_auth()` on *every*
+call — never the relayer. Nothing built through Phase 8 defines how a merchant's signature for a
+specific, server-generated `charge_id` reaches this untrusted process without it custodying a
+merchant secret key (which would defeat the whole point of this phase). `ChainGateway`'s
+`resolveMerchantSigner` is an injected seam precisely so this isn't silently papered over: the
+production entrypoint (`src/index.ts`) throws a clear, actionable error rather than pretending to
+work. See `docs/threat-model.md`'s "merchant charge authorization" entry.
+
+### Real-testnet proof
+
+`scripts/run-relayer-testnet-demo.ts` runs one scheduled `ChargeRequest` through the **actual**
+pipeline (`processChargeRequest` + `createSorobanChainGateway`) against real testnet — not a
+one-off hand-rolled submission. It creates a fresh mandate (payer signs/submits directly, as in
+Phase 7), then hands a real `ChargeRequest` row to the same pipeline code the BullMQ worker runs.
+Real result (see `tasks/todo.md`'s Phase 9 review for the full transcript):
+
+- mandate id `17943c35498152a43ce01c3119dbfb340a0069877590af2a357d68223dbfff76`
+- `create_mandate` tx `8e03653aeddaae57aa8f24176f2f5d51c395356fb97b1c8d75e3166ffbefd5d8`
+- relayer-submitted `charge` tx `86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c`
+  (ledger `3835099`), driven end-to-end through `processChargeRequest`, resulting in exactly one
+  `Payment` row and a `succeeded` `ChargeRequest`.

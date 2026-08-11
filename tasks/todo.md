@@ -183,15 +183,15 @@ the full rationale.
 
 ## Phase 9 — Relayer
 
-- [ ] BullMQ worker; deterministic job id = `chargeRequest.id`
-- [ ] Pipeline: load fresh on-chain mandate → build invocation → simulate → verify merchant/amount/asset/charge_id match request → submit → poll final status → persist tx hash + ledger
-- [ ] Failure classifier: permanent (revoked, expired, duplicate, over-limit, too soon, max count) vs transient (RPC, timeout, not-included, balance/allowance per merchant policy)
-- [ ] Retry schedule: +6h, +24h, +72h → `permanently_failed`
-- [ ] Concurrency test: two workers, same job → at most one success
-- [ ] Event reconciliation: `charge_succeeded` → `Payment` row
-- [ ] Tests: classification table, duplicate job, stale-simulation handling
+- [x] BullMQ worker; deterministic job id = `chargeRequest.id`
+- [x] Pipeline: load fresh on-chain mandate → build invocation → simulate → verify merchant/amount/asset/charge_id match request → submit → poll final status → persist tx hash + ledger
+- [x] Failure classifier: permanent (revoked, expired, duplicate, over-limit, too soon, max count) vs transient (RPC, timeout, not-included, balance/allowance per merchant policy)
+- [x] Retry schedule: +6h, +24h, +72h → `permanently_failed`
+- [x] Concurrency test: two workers, same job → at most one success
+- [x] Event reconciliation: confirmed final on-chain `Result` (equivalent trust level to `charge_succeeded`, see Review) → `Payment` row
+- [x] Tests: classification table, duplicate job, stale-simulation handling
 
-**Gate:** `pnpm test` + one scheduled payment executes end-to-end on testnet.
+**Gate:** `pnpm test` + one scheduled payment executes end-to-end on testnet — both done, see Review.
 
 **Invariant:** relayer key has zero spending authority. Assert in test that relayer-signed charge with altered amount fails.
 
@@ -1106,3 +1106,175 @@ with zero changes inside `apps/api` itself could theoretically hit a stale cache
 generated client is regenerated unconditionally at the start of every script invocation that does
 run) and not fixed in this phase to avoid touching the shared root `turbo.json` for a single
 package's edge case.
+
+### Phase 9 — Relayer (done)
+
+**What changed:** built `apps/relayer` — a BullMQ worker + scheduler that executes `ChargeRequest`s
+against real Soroban state, with zero policy or spending authority (CLAUDE.md §11). New files:
+`src/pipeline.ts` (`processChargeRequest` — the full 10-step pipeline), `src/chain-gateway.ts`
+(`ChainGateway` interface + `createSorobanChainGateway`, the seam to real RPC), `src/classify.ts`
+(failure classification table), `src/retry-schedule.ts` (+6h/+24h/+72h schedule), `src/queue.ts` /
+`src/worker.ts` / `src/scheduler.ts` (BullMQ wiring), `src/context.ts` (resolves expected
+merchant/asset for verification), `src/webhook.ts` (enqueues `pending` `WebhookDelivery` rows —
+delivery itself is Phase 12), `src/config.ts` / `src/db.ts` / `src/index.ts` (production
+entrypoint, replacing the Phase 0 placeholder). `prisma/schema.prisma` gained
+`ChargeRequest.nextAttemptAt` (`DateTime?`, indexed) — the field the scheduler needs to find due
+retries; migration `20260727181410_phase9_relayer_next_attempt`.
+
+**Reused, not duplicated:** `apps/api/src/state-machine.ts`'s `transitionChargeRequest`/
+`assertLegalChargeRequestTransition`, imported from `apps/relayer` via
+`@paymap/api/dist/state-machine.js` (a new workspace dependency, `apps/relayer` on `@paymap/api`
+— the first cross-app dependency in this repo; turbo's `dependsOn: ["^build"]` already orders
+`@paymap/api#build` before `@paymap/relayer#build`, so this needed no `turbo.json` change). Per
+Phase 8's own review note ("Phase 9 owns whatever retry-scheduling transition eventually re-enters
+processing"), added exactly the one edge Phase 8 deliberately left unowned:
+`retryable_failed -> processing`. Updated `state-machine.test.ts`'s "terminal states" assertion
+(it previously asserted `retryable_failed` had zero legal outgoing edges) to match — the generic
+transition-table-driven test loop needed no changes, only the one hand-written assertion.
+
+**The `ChainGateway` seam:** `pipeline.ts` depends on a narrow `ChainGateway` interface, never on
+`@paymap/contract-client`/`@paymap/stellar` directly — mirrors `apps/api/src/chain/mandate-reader.ts`'s
+established "fake in tests, thin real wrapper in production" pattern. Every Postgres/Redis
+integration test runs against a deterministic in-memory `FakeChainGateway`
+(`apps/relayer/src/test/helpers.ts`) — no live Soroban RPC in the default `pnpm test` run, but the
+production `createSorobanChainGateway` is proven once against real testnet (below) using the exact
+same pipeline code.
+
+**A genuine SDK finding, not assumed:** `@stellar/stellar-sdk`'s `AssembledTransaction.signAndSend()`
+already polls `getTransaction` to a final status internally (`SentTransaction.send()`, up to
+`DEFAULT_TIMEOUT` = 5 minutes, verified by reading the SDK's own source at
+`node_modules/.pnpm/@stellar+stellar-sdk@16.1.0/.../sent_transaction.js`) — CLAUDE.md §11's "poll
+for final transaction status" step (7) did not need a hand-rolled polling loop; `submitAsRelayer`
+(already built in Phase 7) already returns a `SentTransaction` whose `.result` is the *confirmed*
+on-chain outcome, parsed from `getTransactionResponse.returnValue`, not the earlier simulation.
+This is also what "event reconciliation" (step 8) uses: the `Payment` row is written from this
+confirmed final `Result`, which carries the same trust level as parsing the `charge_succeeded`
+event's data payload (both derive from the same finalized ledger entry) — a separate
+event-subscription/log-scanning subsystem was judged out of this phase's bounded scope and not
+built; flagged here rather than silently substituted.
+
+**A real bug found via real concurrent execution, not by inspection:** `apps/api` and
+`apps/relayer` share one Postgres database (`docker-compose.yml`'s single `paymap` DB — one
+backend data model, CLAUDE.md §4, not a duplicate). Turbo's task graph has no ordering between
+`@paymap/api#test` and `@paymap/relayer#test` (only `dependsOn: ["^build"]`), so `pnpm test` from
+the repo root runs both real-Postgres suites *concurrently* — and both call a full
+`cleanDatabase()` at nearly every test's `beforeEach`. This produced real, observed FK-violation
+failures (one suite's cleanup deleting rows the other suite's in-flight test still needed) the
+first time the full gate ran with both suites present — not a hypothetical race. Fixed by giving
+`apps/relayer`'s tests a distinct Postgres *schema* (`relayer_test`, a namespace within the same
+database — `apps/relayer/package.json`'s `test` script exports `DATABASE_URL` with
+`schema=relayer_test` before `prisma migrate deploy`/vitest; `vitest.setup.ts` defaults to the same
+for a bare `vitest` invocation). Full physical isolation, zero process-level coordination needed;
+documented in `vitest.setup.ts`'s comment so a future phase doesn't reintroduce the collision.
+
+**Classification table** (`apps/relayer/src/classify.ts` — consumes `packages/stellar`'s own
+`retryable` flag per contract error, never re-derives it; throws `UnclassifiableContractError`,
+never defaults to a retry, for any name outside the frozen 24):
+
+| permanent (14) | permanent (10, cont.) | transient (2) |
+| --- | --- | --- |
+| MandateNotFound | PaymentNotFound | InsufficientAllowance |
+| MandateNotActive | RefundExceedsPayment | InsufficientBalance |
+| MandatePaused | DuplicateRefund | |
+| MandateRevoked | ArithmeticOverflow | |
+| MandateCompleted | InvalidMandateInput | |
+| MandateExpired | DuplicateMandate | |
+| ChargeBeforeStart | InvalidStateTransition | |
+| ChargeTooSoon | RefundNotFound | |
+| InvalidAmount | | |
+| AmountExceedsChargeLimit | | |
+| AmountExceedsPeriodLimit | | |
+| ChargeCountExceeded | | |
+| DuplicateCharge | | |
+| UnauthorizedMerchant | | |
+
+Plus three infra-observed conditions, always transient and never contract-error codes at all:
+`RPC_UNAVAILABLE`, `SEND_FAILED`, `TX_NOT_INCLUDED`.
+
+**Duplicate-delivery proof (the headline test) — real output:**
+```
+✓ src/pipeline.test.ts > processChargeRequest > duplicate job delivery — at most one successful
+  charge > two concurrent processChargeRequest calls for the SAME ChargeRequest produce exactly
+  one succeeded outcome, one Payment row, and one on-chain submit() call
+```
+Two independent `PrismaClient` connections (simulating two separate worker processes) race
+`processChargeRequest` on the same `ChargeRequest` id via `Promise.all` against a real Postgres,
+sharing only the chain gateway (to count real "chain" calls). Asserted: exactly one `succeeded`
+outcome and one `skipped_not_claimable`, exactly one `gateway.submit()` call, exactly one `Payment`
+row. The guarantee is the DB-guarded `scheduled|retryable_failed -> processing` transition — not
+BullMQ's own job locking, which this system deliberately does not rely on alone.
+
+**"Relayer cannot alter amount or destination" — how it was proven, two layers:**
+1. *Structural (on-chain, inherited from Phase 3/4/6):* `buildCharge` takes no merchant/destination
+   argument at all — the contract reads the payout address only from stored `Mandate` state; `amount`
+   is bound inside the merchant's Soroban authorization entry (hash includes function+args), so
+   altering it after signing invalidates the signature. This was already proven by the Phase 3/4/6
+   Rust test suites; Phase 9 depends on it rather than re-proving it.
+2. *Application-level, defense-in-depth, newly tested this phase:* `apps/relayer/src/pipeline.test.ts`'s
+   "relayer cannot alter amount or destination" suite — a simulated receipt with a different
+   merchant, an inflated amount, or a different asset than the `ChargeRequest`/`Product` describe is
+   rejected (`SIMULATION_MISMATCH`, permanently failed) with `gateway.submitCallLog` asserted empty
+   in every case — i.e. the point that would carry a signature to the network is never reached.
+
+**Real testnet run — actually executed, tx hash recorded:** `scripts/run-relayer-testnet-demo.ts`
+ran the real `createSorobanChainGateway` + `processChargeRequest` (the exact pipeline code the
+BullMQ worker runs, not a parallel one-off) against Stellar testnet:
+- mandate id: `17943c35498152a43ce01c3119dbfb340a0069877590af2a357d68223dbfff76`
+- `create_mandate` tx (payer signs/submits directly, Phase 7-style):
+  `8e03653aeddaae57aa8f24176f2f5d51c395356fb97b1c8d75e3166ffbefd5d8`
+- relayer-executed `charge` tx (via `processChargeRequest`):
+  `86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c`, ledger `3835099`
+- payment id: `8a17da06153d3cd7ac34e18b713aa431295fc43759c6ca52924b99cc5e794b85`
+- pipeline outcome: `{"kind":"succeeded","paymentId":"8a17da06...","txHash":"86b09bb3..."}`
+- one `Payment` row written, `ChargeRequest` transitioned to `succeeded` — via the real DB
+  transaction path, not a mock
+
+**Deviation (flagged, not silently resolved) — merchant charge-authorization is an open question:**
+`charge()` requires `mandate.merchant.require_auth()` on every call. No mechanism was defined in
+Phases 1-8 for a merchant's signature to reach the relayer without it custodying a merchant secret
+key. `ChainGateway`'s `resolveMerchantSigner` is an injected seam so this isn't silently papered
+over: the production entrypoint (`apps/relayer/src/index.ts`) throws a clear, actionable error
+rather than pretending to work; the required testnet proof script supplies the same known demo
+merchant keypair Phase 7 already used (acceptable for a demo, not a production design). Full
+writeup: `docs/threat-model.md`'s "Open trust-model question: merchant charge authorization" entry.
+This did not block the phase's actual deliverable (the pipeline itself, fully built and tested) —
+it blocks only a *future* phase's move to real multi-merchant production wiring.
+
+**Other deviations (flagged):**
+- Two additive schema changes beyond the literal brief: `ChargeRequest.nextAttemptAt` (necessary —
+  the scheduler cannot find due retries without it) and the `retryable_failed -> processing` edge
+  (explicitly anticipated by Phase 8's own review).
+- `apps/relayer` depends on `@paymap/api` (workspace) for the shared state machine — the first
+  cross-app dependency in this repo. A `packages/` extraction would be more conventional long-term,
+  but the brief explicitly said "reuse them, do not write a second copy," and Phase 8 already built
+  the canonical table inside `apps/api`; moving it now would be a larger, non-requested refactor.
+  Flagged for a future cleanup pass, not silently accepted as ideal.
+- `Payment.ledger`/ `transactionHash` are populated from the SDK's confirmed `getTransactionResponse`,
+  not from a separate contract-event subscription — see the SDK finding above.
+
+**Commands run (all passed):**
+```
+docker compose up -d
+pnpm install
+pnpm lint                            (16/16 tasks)
+pnpm typecheck                       (16/16 tasks)
+pnpm build                           (16/16 tasks)
+pnpm test                            (16/16 tasks; apps/api: 143 tests; apps/relayer: 56 new tests,
+                                       all pass)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-token + 3
+                                       evil-token, unchanged — no contract touched this phase)
+pnpm --filter @paymap/scripts run demo:relayer   (real testnet run, see tx hashes above)
+```
+
+**Unverified / left for later phases:** no real BullMQ `Worker` process was run end-to-end against
+live jobs in this phase's tests (`worker.ts` is thin wiring around the already-tested
+`processChargeRequest`, exercised structurally but not via an actual running `Worker` consuming a
+real job in the test suite — `queue.ts`/`scheduler.ts` *are* tested against real Redis). A process
+crash mid-poll (between the `submitted` DB write and `submit()`'s up-to-5-minute result) would
+leave a `ChargeRequest` stuck at `submitted` with no automatic recovery — no reconciliation sweep
+for stuck-`submitted` rows exists yet, flagged as a real gap for a future phase. Webhook *delivery*
+remains Phase 12 (this phase only enqueues `pending` rows, per CLAUDE.md's own step 10 scoping).
+Refund submission (mirroring `charge`) still does not exist — `RefundRequest` rows still never
+progress past `scheduled`, unchanged from the Phase 8 review's own note.

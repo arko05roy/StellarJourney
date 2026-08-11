@@ -1,0 +1,263 @@
+/**
+ * The relayer's worker pipeline (CLAUDE.md §11, PLAN.md §15), run once per
+ * `ChargeRequest`. Reuses `apps/api/src/state-machine.ts`'s guard/transition
+ * helper verbatim (not re-implemented) — the only change this phase makes
+ * to that shared table is the `retryable_failed -> processing` edge it adds
+ * for the scheduler's retry re-entry.
+ *
+ * Order of operations, matching CLAUDE.md §11 exactly:
+ *   1. Claim: guarded DB transition `scheduled|retryable_failed -> processing`.
+ *      A concurrent caller that loses this race returns
+ *      `skipped_not_claimable` having made zero chain calls — this, not
+ *      BullMQ's own job locking, is what guarantees at most one successful
+ *      charge under duplicate job delivery (decision #2).
+ *   2. Load fresh on-chain mandate state (never the DB's `MandateIndex`
+ *      cache — CLAUDE.md §2).
+ *   3. Build the invocation (`ChainGateway.prepareCharge`, which also
+ *      simulates as part of construction).
+ *   4. (simulation already happened in step 3 — `AssembledTransaction`
+ *      simulates on construction.)
+ *   5. Verify merchant / amount / asset / charge_id / mandate_id from the
+ *      *simulated* receipt against what the `ChargeRequest` + its owning
+ *      `Merchant`/`Product` say (decision #3). A rejected simulation is
+ *      classified via the frozen contract-error table before ever asking
+ *      for a signature; a verification *mismatch* (the simulation succeeded
+ *      but disagrees with the request) is a hard failure, never a retry —
+ *      this is the concrete proof that a relayer cannot alter amount or
+ *      destination and have it accepted.
+ *   6. Transition `processing -> simulated -> submitted`, submit once.
+ *   7. `ChainGateway.submit()` polls to a final on-chain result internally
+ *      (the SDK's `SentTransaction.send()` already does this — see
+ *      `chain-gateway.ts`'s module doc).
+ *   8. On success: write the `Payment` row from the *confirmed* receipt
+ *      (never optimism) and the `succeeded` transition atomically, in one
+ *      DB transaction.
+ *   9. On failure: classify -> `retryable_failed` (with the next attempt
+ *      time) or `permanently_failed`.
+ *   10. Either way, enqueue the corresponding `WebhookDelivery` row
+ *       (`pending` — delivery itself is Phase 12), atomically with the
+ *       terminal transition.
+ */
+import { transitionChargeRequest } from "@paymap/api/dist/state-machine.js";
+import { ApiError } from "@paymap/api/dist/errors.js";
+import { MandateReadError } from "@paymap/contract-client";
+import type { ChargeRequestStatus, PrismaClient } from "./db.js";
+import type { ChainGateway } from "./chain-gateway.js";
+import { classifyContractErrorName, UnclassifiableContractError, type ClassifiedFailure } from "./classify.js";
+import { resolveChargeContext, ChargeContextError } from "./context.js";
+import { nextRetryAt } from "./retry-schedule.js";
+import { enqueueChargeWebhook } from "./webhook.js";
+
+export type Logger = (level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>) => void;
+const noopLogger: Logger = () => undefined;
+
+export interface PipelineDeps {
+  prisma: PrismaClient;
+  gateway: ChainGateway;
+  now: () => Date;
+  logger?: Logger;
+}
+
+export type PipelineOutcome =
+  | { kind: "skipped_not_claimable" }
+  | { kind: "succeeded"; paymentId: string; txHash: string }
+  | { kind: "retry_scheduled"; nextAttemptAt: Date; reason: string }
+  | { kind: "permanently_failed"; reason: string };
+
+const MANUAL_REASON = {
+  chargeContextNotFound: "CHARGE_CONTEXT_NOT_FOUND",
+  simulationMismatch: "SIMULATION_MISMATCH",
+} as const;
+
+/** Reasons that are never contract-error codes — always a permanent, hard failure (never routed through the retry schedule). */
+function permanentReason(reason: string): ClassifiedFailure {
+  return { failureClass: "permanent", reason };
+}
+
+export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: string): Promise<PipelineOutcome> {
+  const { prisma, gateway, now } = deps;
+  const log = deps.logger ?? noopLogger;
+
+  const maybeChargeRequest = await prisma.chargeRequest.findUnique({ where: { id: chargeRequestId } });
+  if (!maybeChargeRequest) {
+    throw new Error(`ChargeRequest "${chargeRequestId}" does not exist.`);
+  }
+  // Re-bound as a fresh `const` so its non-null type is retained inside the
+  // `fail` closure below (TS widens a null-checked outer binding back to
+  // its full type across a nested function boundary).
+  const chargeRequest = maybeChargeRequest;
+
+  const claimFrom: ChargeRequestStatus = chargeRequest.status === "retryable_failed" ? "retryable_failed" : "scheduled";
+  const attemptCount = chargeRequest.attemptCount + 1;
+  try {
+    await transitionChargeRequest(prisma, chargeRequestId, claimFrom, "processing", { attemptCount });
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "InvalidStateTransition") {
+      log("info", "charge_request.claim_lost", { chargeRequestId, attemptedFrom: claimFrom });
+      return { kind: "skipped_not_claimable" };
+    }
+    throw error;
+  }
+  log("info", "charge_request.claimed", { chargeRequestId, mandateId: chargeRequest.mandateId, chargeId: chargeRequest.chargeId, attemptCount });
+
+  /** Terminal-failure path: classifies, transitions from `from`, and enqueues `payment.failed` — all in one DB transaction. */
+  async function fail(from: ChargeRequestStatus, classified: ClassifiedFailure): Promise<PipelineOutcome> {
+    const retryAt = classified.failureClass === "transient" ? nextRetryAt(attemptCount, now()) : undefined;
+    if (retryAt !== undefined) {
+      await transitionChargeRequest(prisma, chargeRequestId, from, "retryable_failed", {
+        failureCode: classified.reason,
+        nextAttemptAt: retryAt,
+      });
+      log("warn", "charge_request.retry_scheduled", { chargeRequestId, reason: classified.reason, nextAttemptAt: retryAt.toISOString() });
+      return { kind: "retry_scheduled", nextAttemptAt: retryAt, reason: classified.reason };
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await transitionChargeRequest(tx, chargeRequestId, from, "permanently_failed", {
+        failureCode: classified.reason,
+        nextAttemptAt: null,
+      });
+      await enqueueChargeWebhook(tx, {
+        merchantId: chargeRequest.merchantId,
+        eventType: "payment.failed",
+        payload: {
+          chargeRequestId,
+          mandateId: chargeRequest.mandateId,
+          chargeId: chargeRequest.chargeId,
+          reason: classified.reason,
+        },
+      });
+    });
+    log("error", "charge_request.permanently_failed", { chargeRequestId, reason: classified.reason });
+    return { kind: "permanently_failed", reason: classified.reason };
+  }
+
+  // Step 2: fresh on-chain mandate read.
+  let mandate;
+  try {
+    mandate = await gateway.getMandate(chargeRequest.mandateId);
+  } catch (error) {
+    if (error instanceof MandateReadError) {
+      return fail("processing", classifyContractErrorName(error.errorName));
+    }
+    throw error;
+  }
+
+  let context;
+  try {
+    context = await resolveChargeContext(prisma, chargeRequest.merchantId, chargeRequest.mandateId);
+  } catch (error) {
+    if (error instanceof ChargeContextError) {
+      return fail("processing", permanentReason(MANUAL_REASON.chargeContextNotFound));
+    }
+    throw error;
+  }
+
+  if (context.merchantWalletAddress !== mandate.merchant) {
+    // The mandate's own merchant no longer matches what this merchant's
+    // records say it should be (e.g. a data-integrity bug, or the mandate
+    // id was somehow associated with the wrong merchant). Refuse to
+    // proceed — never trust that the merchant on the request is the
+    // merchant on the mandate.
+    return fail("processing", permanentReason(MANUAL_REASON.simulationMismatch));
+  }
+
+  // Steps 3-4: build + simulate.
+  const prepared = await gateway.prepareCharge({
+    mandateId: chargeRequest.mandateId,
+    chargeId: chargeRequest.chargeId,
+    amount: BigInt(chargeRequest.amount),
+    invoiceHash: chargeRequest.invoiceHash,
+  });
+
+  if (!prepared.simulated.ok) {
+    let classified: ClassifiedFailure;
+    try {
+      classified = classifyContractErrorName(prepared.simulated.error.info.name);
+    } catch (error) {
+      if (error instanceof UnclassifiableContractError) {
+        log("error", "charge_request.unclassifiable_contract_error", { chargeRequestId, name: prepared.simulated.error.info.name });
+      }
+      throw error;
+    }
+    return fail("processing", classified);
+  }
+
+  // Step 5: verify the simulation matches the request — merchant, amount,
+  // asset, charge_id, and mandate_id must all agree with fresh on-chain
+  // state and this merchant's own records. Any mismatch is a hard failure,
+  // never a retry (decision #3) — this is the concrete proof that neither a
+  // buggy nor a malicious relayer process can make a different charge
+  // succeed than the one the merchant's request actually described.
+  const { receipt } = prepared.simulated;
+  const expectedAmount = BigInt(chargeRequest.amount);
+  const verificationOk =
+    receipt.merchant === context.merchantWalletAddress &&
+    receipt.asset === context.expectedAssetAddress &&
+    receipt.amount === expectedAmount &&
+    receipt.chargeId === chargeRequest.chargeId &&
+    receipt.mandateId === chargeRequest.mandateId &&
+    receipt.invoiceHash === chargeRequest.invoiceHash;
+
+  if (!verificationOk) {
+    log("error", "charge_request.simulation_mismatch", {
+      chargeRequestId,
+      expected: { merchant: context.merchantWalletAddress, asset: context.expectedAssetAddress, amount: expectedAmount.toString() },
+      simulated: { merchant: receipt.merchant, asset: receipt.asset, amount: receipt.amount.toString() },
+    });
+    return fail("processing", permanentReason(MANUAL_REASON.simulationMismatch));
+  }
+
+  // Step 6: transition through simulated -> submitted, then submit once.
+  await transitionChargeRequest(prisma, chargeRequestId, "processing", "simulated");
+  await transitionChargeRequest(prisma, chargeRequestId, "simulated", "submitted");
+
+  // Step 7: `submit()` polls to a final on-chain result internally.
+  const result = await prepared.submit();
+
+  if (result.kind === "success") {
+    const paymentId = result.receipt.paymentId;
+    await prisma.$transaction(async (tx) => {
+      await tx.payment.create({
+        data: {
+          paymentId,
+          merchantId: chargeRequest.merchantId,
+          mandateId: chargeRequest.mandateId,
+          chargeId: chargeRequest.chargeId,
+          chargeRequestId: chargeRequest.id,
+          amount: result.receipt.amount.toString(),
+          assetAddress: result.receipt.asset,
+          transactionHash: result.txHash,
+          ledger: result.ledger,
+        },
+      });
+      await transitionChargeRequest(tx, chargeRequestId, "submitted", "succeeded", { transactionHash: result.txHash });
+      await enqueueChargeWebhook(tx, {
+        merchantId: chargeRequest.merchantId,
+        eventType: "payment.succeeded",
+        payload: { chargeRequestId, paymentId, mandateId: chargeRequest.mandateId, chargeId: chargeRequest.chargeId, transactionHash: result.txHash },
+      });
+    });
+    log("info", "charge_request.succeeded", { chargeRequestId, paymentId, txHash: result.txHash });
+    return { kind: "succeeded", paymentId, txHash: result.txHash };
+  }
+
+  if (result.kind === "contract_error") {
+    if (result.txHash !== undefined) {
+      await prisma.chargeRequest.update({ where: { id: chargeRequestId }, data: { transactionHash: result.txHash } });
+    }
+    let classified: ClassifiedFailure;
+    try {
+      classified = classifyContractErrorName(result.error.info.name);
+    } catch (error) {
+      if (error instanceof UnclassifiableContractError) {
+        log("error", "charge_request.unclassifiable_contract_error", { chargeRequestId, name: result.error.info.name });
+      }
+      throw error;
+    }
+    return fail("submitted", classified);
+  }
+
+  // infra_error
+  return fail("submitted", result.failure);
+}

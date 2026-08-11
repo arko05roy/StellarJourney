@@ -37,10 +37,13 @@ describe("CHARGE_REQUEST_LEGAL_TRANSITIONS guard (pure, exhaustive)", () => {
     }
   }
 
-  it("succeeded, retryable_failed, and permanently_failed are terminal for Phase 8's guard (no legal outgoing edge)", () => {
+  it("succeeded and permanently_failed are terminal (no legal outgoing edge)", () => {
     expect(CHARGE_REQUEST_LEGAL_TRANSITIONS.succeeded).toEqual([]);
-    expect(CHARGE_REQUEST_LEGAL_TRANSITIONS.retryable_failed).toEqual([]);
     expect(CHARGE_REQUEST_LEGAL_TRANSITIONS.permanently_failed).toEqual([]);
+  });
+
+  it("retryable_failed -> processing is the one edge Phase 9's scheduler owns (retry re-entry)", () => {
+    expect(CHARGE_REQUEST_LEGAL_TRANSITIONS.retryable_failed).toEqual(["processing"]);
   });
 });
 

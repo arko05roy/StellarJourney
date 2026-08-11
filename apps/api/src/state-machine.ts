@@ -5,18 +5,21 @@
  * transition helper ship now so an illegal transition is impossible to
  * write by construction, not just by convention.
  *
- * Legal edges, exactly as CLAUDE.md §17 draws them:
+ * Legal edges, exactly as CLAUDE.md §17 draws them, plus the one edge
+ * Phase 8 deliberately left unowned (see its module-doc note, carried
+ * forward here): Phase 9's scheduler re-enters `processing` from
+ * `retryable_failed` once `nextAttemptAt` elapses — the *only* addition
+ * this phase makes to the table.
  *
- *   scheduled  -> processing
- *   processing -> simulated | retryable_failed | permanently_failed
- *   simulated  -> submitted
- *   submitted  -> succeeded | retryable_failed | permanently_failed
+ *   scheduled        -> processing
+ *   processing       -> simulated | retryable_failed | permanently_failed
+ *   simulated        -> submitted
+ *   submitted        -> succeeded | retryable_failed | permanently_failed
+ *   retryable_failed -> processing   (Phase 9: scheduler-driven retry)
  *
- * `succeeded` is terminal (CLAUDE.md §17: "a succeeded charge is
- * terminal"). CLAUDE.md's diagram draws no outgoing edge from
- * `retryable_failed` either — Phase 9 owns whatever retry-scheduling
- * transition eventually re-enters `processing`; Phase 8 does not invent
- * one.
+ * `succeeded` and `permanently_failed` are terminal (CLAUDE.md §17: "a
+ * succeeded charge is terminal"; a permanently-failed one is never
+ * retried — CLAUDE.md §11).
  */
 import { ApiError } from "./errors.js";
 import type { ChargeRequestStatus } from "./db.js";
@@ -30,7 +33,7 @@ export const CHARGE_REQUEST_LEGAL_TRANSITIONS: Readonly<Record<Status, readonly 
   simulated: ["submitted"],
   submitted: ["succeeded", "retryable_failed", "permanently_failed"],
   succeeded: [],
-  retryable_failed: [],
+  retryable_failed: ["processing"],
   permanently_failed: [],
 };
 

@@ -320,3 +320,62 @@
   override `errorResponseBuilder`, include `statusCode: context.statusCode`
   in the returned object (mirroring what the default builder does) and
   detect it in your error handler by that shape, not by `instanceof`.
+- When two workspace apps share one real Postgres database for their own
+  test suites (not mocked — this repo's own standard), `turbo run test`'s
+  default task graph (`dependsOn: ["^build"]`) gives NO ordering between
+  sibling apps' `test` tasks — they run concurrently. If both apps'
+  `beforeEach` calls a full `cleanDatabase()` (delete every row), one
+  suite's cleanup will delete rows the other suite's in-flight test still
+  needs, producing real FK-violation failures that look like a totally
+  unrelated bug in whichever test happened to lose the race — this was
+  observed directly (`apps/api`'s and `apps/relayer`'s test suites both
+  failing with `deleteMany()`/`create()` FK violations) the first time both
+  suites coexisted in one `pnpm test` run, not predicted in advance. Fix:
+  give the newer app's tests a distinct Postgres *schema* (a namespace
+  within the same database, via `DATABASE_URL`'s `?schema=` query param) —
+  full physical isolation, no cross-process coordination needed, and
+  `prisma migrate deploy` auto-creates the schema if it doesn't exist yet.
+  Set the override where the `prisma migrate deploy` shell step itself runs
+  (a package.json `test` script, via `export DATABASE_URL=... &&`), not only
+  in `vitest.setup.ts` — `vitest.setup.ts` only takes effect once vitest's
+  Node process starts, which is *after* `migrate deploy` already ran as a
+  separate `&&`-chained command against whatever `DATABASE_URL` was already
+  in the shell environment.
+- `@stellar/stellar-sdk/contract`'s `AssembledTransaction.signAndSend()` /
+  `SentTransaction.send()` already polls `getTransaction` in a loop
+  (exponential backoff, up to `DEFAULT_TIMEOUT` = 5 minutes) until a
+  non-`NOT_FOUND` status, and `SentTransaction.result` parses the
+  *confirmed* `getTransactionResponse.returnValue` — not a replay of the
+  earlier simulation. Verified by reading the SDK's own source
+  (`lib/esm/contract/sent_transaction.js`), not assumed. A relayer/worker
+  built on top of `submitAsInvoker`/`submitAsRelayer` does not need to
+  hand-roll a "poll for final status" loop — that requirement is already
+  satisfied by the point `signAndSend()`'s promise resolves. The final
+  `getTransactionResponse` union type only carries a `ledger` field on its
+  `SUCCESS`/`FAILED` variants, not `NOT_FOUND` — narrow with
+  `"ledger" in finalResponse` (a real type guard) rather than a cast, since
+  by the time `.result` is readable without throwing, the status is
+  provably not `NOT_FOUND` but TypeScript doesn't know that automatically.
+- A `const` binding that TypeScript has narrowed to non-null via an earlier
+  `if (!x) throw` guard loses that narrowing the moment it's referenced
+  inside a **nested function** defined later in the same scope (an arrow
+  function assigned to a `const` and called later, e.g. a `fail(...)`
+  closure) — TS conservatively widens back to the original nullable type
+  there, since it can't prove the closure won't be invoked from somewhere
+  else before the guard could matter. Fix: re-bind to a fresh `const` right
+  after the guard (`const x = maybeX;` once `maybeX` is null-checked) rather
+  than trying to get the closure to "see" the outer narrowing.
+- A cross-app workspace dependency (e.g. `apps/relayer` depending on
+  `@paymap/api` to reuse a shared table/helper, per an explicit "reuse it,
+  don't duplicate it" instruction) works via a plain deep import to the
+  dependency's **built** output (`@paymap/api/dist/state-machine.js`), the
+  same way `apps/relayer`'s own `db.ts` reaches into
+  `prisma/generated/client` — no `exports` field needed in the source
+  package's `package.json` for this to resolve under
+  `moduleResolution: "bundler"`, since deep subpath imports fall back to
+  plain filesystem resolution when no `exports` map is declared. The only
+  requirement is that the dependency actually gets built first, which
+  `turbo.json`'s existing `dependsOn: ["^build"]` on the `build`/`typecheck`
+  tasks already guarantees once the consuming package lists it as a real
+  `dependencies` entry (pnpm workspace protocol) — no `turbo.json` change
+  needed.

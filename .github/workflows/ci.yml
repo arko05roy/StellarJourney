@@ -16,7 +16,8 @@ jobs:
     # Postgres (never a mocked database) — provided here as a service
     # container rather than docker-compose.yml, since Actions runners
     # already give every job a Docker daemon and `services:` is the
-    # idiomatic way to wire one up for CI.
+    # idiomatic way to wire one up for CI. Phase 9 adds Redis for
+    # apps/relayer's BullMQ queue/scheduler tests.
     services:
       postgres:
         image: postgres:16
@@ -31,8 +32,18 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/paymap?schema=public
+      REDIS_URL: redis://localhost:6379
     steps:
       - uses: actions/checkout@v4
 
