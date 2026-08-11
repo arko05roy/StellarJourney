@@ -16,19 +16,18 @@ const DELIVERY_STATUS_VARIANT: Record<string, "default" | "secondary" | "outline
 };
 
 /**
- * The honest current state of each event (this phase's decision #7 /
- * `docs/merchant-api.md`'s "which events actually have a producer today"
- * table) — never implies an event is flowing when nothing in this system
- * actually produces it yet.
+ * The honest current state of each event (`docs/merchant-api.md`'s "which
+ * events actually have a producer today" table) — never implies an event is
+ * flowing when nothing in this system actually produces it yet.
  */
 const EVENT_PRODUCER_STATUS: ReadonlyArray<{ event: string; producing: boolean; note: string }> = [
   { event: "payment.succeeded", producing: true, note: "Fired by the relayer's charge pipeline on every confirmed charge." },
   { event: "payment.failed", producing: true, note: "Fired on a permanently failed charge attempt (not on every retry)." },
   { event: "mandate.completed", producing: true, note: "Fired when a charge brings the mandate to its maximum charge count." },
-  { event: "mandate.active", producing: false, note: "Mandate creation is signed directly from the payer's wallet — this API never observes it yet." },
-  { event: "mandate.paused", producing: false, note: "Pause is signed directly from the payer's wallet — needs an on-chain event indexer." },
-  { event: "mandate.resumed", producing: false, note: "Resume is signed directly from the payer's wallet — needs an on-chain event indexer." },
-  { event: "mandate.revoked", producing: false, note: "Revoke is signed directly from the payer's wallet — needs an on-chain event indexer." },
+  { event: "mandate.active", producing: true, note: "Phase 12c: the on-chain event indexer observes the contract's own mandate_created event." },
+  { event: "mandate.paused", producing: true, note: "Phase 12c: the on-chain event indexer observes the contract's own mandate_paused event." },
+  { event: "mandate.resumed", producing: true, note: "Phase 12c: the on-chain event indexer observes the contract's own mandate_resumed event." },
+  { event: "mandate.revoked", producing: true, note: "Phase 12c: the on-chain event indexer observes the contract's own mandate_revoked event." },
   { event: "refund.succeeded", producing: false, note: "No relayer pipeline submits refund transactions on-chain yet." },
 ];
 

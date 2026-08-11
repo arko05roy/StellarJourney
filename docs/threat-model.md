@@ -148,3 +148,39 @@ adversarial coverage in Phase 14.
   double check no authenticated route relies on cookie-based session state that CORS + credentials
   could expose (currently none do — auth is a bearer header the browser never sends automatically
   cross-origin).
+
+## Phase 12c additions — on-chain event indexer
+
+A new trust boundary: `apps/relayer/src/indexer` is the first component in this system that
+*observes* chain state through a channel other than a direct request/response `get_mandate`/
+`charge` simulation — it polls Soroban RPC's `getEvents` and reacts to whatever it returns.
+
+- **Trusting the RPC node's event stream.** The indexer has no independent way to verify that a
+  Soroban RPC node is returning a complete, un-tampered event stream for the mandate-registry
+  contract — the same trust already implicitly extended to every other RPC-dependent read in this
+  system (`get_mandate`, transaction simulation/submission). A malicious or buggy RPC node could in
+  principle omit or fabricate events. Mitigation is the same as everywhere else in this codebase:
+  the contract itself remains the actual policy authority (CLAUDE.md §2) — the indexer only ever
+  produces a *notification* (`MandateIndex` refresh, merchant webhook), never a fund-moving action
+  or a bypass of the charge/refund validation path. A dropped or fabricated event at worst causes a
+  stale dashboard/missed webhook, never an incorrect charge.
+- **Deterministic-event-id collision across producers.** `WebhookDelivery.eventId` is a single
+  table-wide unique constraint shared by every producer (`randomUUID()` from the charge pipeline,
+  `chain:<rpc event id>` from the indexer, `webhook.test` sentinel strings from the test endpoint).
+  A collision between a random UUID and a `chain:`-prefixed deterministic id is astronomically
+  unlikely and would only ever cause one delivery to be silently dropped (an availability concern,
+  never an authorization one) — not treated as a live threat, but recorded here since it's a shared
+  namespace, not a per-producer one.
+- **Merchant misattribution via `Merchant.walletAddress` reuse.** `mandate-index-sync.ts` resolves
+  an event's owning merchant by matching the on-chain `merchant` address against
+  `Merchant.walletAddress`, which has no uniqueness constraint in the schema. If two `Merchant` rows
+  ever shared a wallet address (not possible through this system's own merchant-creation flow today,
+  which doesn't check for it either), `findFirst` would pick one arbitrarily and the other would
+  never be notified for that mandate. Low real-world likelihood given the current onboarding flow,
+  but flagged here rather than silently assumed away — Phase 14 should consider a uniqueness
+  constraint on `Merchant.walletAddress`.
+- **Retention-gap failure mode is fail-loud, not fail-safe-by-default.** `IndexerRetentionGapError`
+  stops the indexer from advancing past a gap, but does not automatically page anyone — an operator
+  has to be watching the relayer's logs (`indexer.retention_gap` at `"error"` level) to notice. This
+  is an operational-maturity gap (alerting), not a correctness one: the alternative (silently
+  skipping the gap) is strictly worse and is what decision #1 explicitly rejected.

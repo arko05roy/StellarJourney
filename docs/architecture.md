@@ -506,3 +506,170 @@ shared module-level object — `playwright.config.ts` runs `fullyParallel: true`
 mock-server process for the whole spec file, and an earlier single-`merchant`-variable version
 produced real cross-test 401s the first time a second (accessibility) merchant test ran
 concurrently with the happy-path test's own API-key rotation step.
+
+## Phase 12c — On-chain event indexer (`apps/relayer/src/indexer`)
+
+### Why this exists
+
+Phase 12a shipped webhook delivery but 4 of the 8 required events (PLAN.md §14, CLAUDE.md §12) had
+no producer: `mandate.active`/`mandate.paused`/`mandate.resumed`/`mandate.revoked`. Those contract
+calls (`create_mandate`/`pause_mandate`/`resume_mandate`/`revoke_mandate`) are signed and submitted
+directly from the payer's wallet (Phase 10/11) — never routed through `apps/api` — so nothing
+observed them. The same gap meant `MandateIndex` only ever got created/refreshed when a checkout
+flow happened to link one; a payer pausing or revoking out-of-band left the index stale.
+
+### Placement: `apps/relayer`, not a new app
+
+The indexer is architecturally identical in shape to the charge/webhook workers already in
+`apps/relayer` (poll -> process -> idempotent DB write) and needs the same infrastructure: a
+`ChainGateway`-style read seam, `WebhookDelivery` enqueue, and a `setInterval` scheduler. Standing up
+a fifth app for one more poll loop would duplicate all of that. `apps/relayer/src/index.ts` wires
+`startIndexerScheduler` alongside the existing charge/webhook schedulers.
+
+### Layering
+
+```text
+contracts/mandate-registry/src/events.rs      the 5 lifecycle #[contractevent]s — the schema
+        │
+packages/contract-client/src/events.ts        decodes rpc.Api.EventResponse -> MandateLifecycleEvent
+        │  (./events subpath — never the root barrel, see "browser-safe subpaths" note below)
+        ▼
+packages/stellar/src/events.ts                fetchMandateLifecycleEvents: RPC access, pagination
+        ▼
+apps/relayer/src/indexer/
+  chain-events-gateway.ts   the injected seam (real RPC / FakeChainEventsGateway in tests)
+  cursor.ts                 durable poll-cursor persistence (IndexerCursor, CAS)
+  mandate-index-sync.ts     MandateIndex upsert + webhook enqueue, merchant resolution/isolation
+  indexer.ts                one tick: fetch -> gap-check -> apply each event -> advance cursor
+  scheduler.ts               setInterval loop around indexer.ts
+```
+
+`packages/contract-client/package.json` gained a `./events` subpath export (mirroring the existing
+`./client`/`./domain` pattern) specifically so `packages/stellar/src/events.ts` never imports from
+the package's root barrel — that barrel also re-exports `./deployment-registry.js` (`node:fs`), and
+`packages/stellar`'s own root barrel is imported by value from `apps/web` (`lib/mandate-gateway.ts`,
+`lib/chain-gateway.ts`). Without the subpath, adding `events.ts` to `packages/stellar/src/index.ts`
+broke `next build` outright (`UnhandledSchemeError: Reading from "node:fs"`) — the same failure mode
+`tasks/lessons.md` already documents for `contract-client`'s own barrel, recurring one layer up.
+
+### Event decoding (`packages/contract-client/src/events.ts`)
+
+Verified directly against `soroban-sdk-macros-27.0.2`'s `derive_event.rs`, not assumed: a
+`#[contractevent]`'s wire topics are `[Symbol(snake_case(struct_name)), ...#[topic] fields in
+declaration order]` — every event in `events.rs` topics `mandate_id`, `payer`, `merchant` in that
+order, so topics are always `[name, mandate_id, payer, merchant]`. The event's `data` is an `ScvMap`
+(the macro's default `data_format`, never overridden) keyed by Rust field name.
+`@stellar/stellar-sdk`'s `scValToNative` converts an `ScvMap` straight into a plain object keyed by
+the already-decoded field name and an `ScvVec`/topics list into a plain array — no contract spec or
+hand-rolled XDR walking needed, just read fields by name. `decodeMandateLifecycleEvent` returns
+`undefined` for anything that isn't one of the 5 lifecycle events (including `charge_succeeded`/
+`refund_succeeded`, which already have producers and are out of this indexer's scope) and throws
+`MandateEventDecodeError` only when a *recognized* lifecycle event's shape doesn't match what
+`events.rs` publishes — a genuine ABI drift, not a skip-and-continue condition.
+`packages/contract-client/src/events.test.ts` proves this against fixtures built with
+`nativeToScVal`/`xdr.ScVal.scvMap` matching the macro's exact output shape, not hand-waved stand-ins.
+
+### Event -> webhook mapping and `mandate_completed`'s special case
+
+```text
+mandate_created  -> mandate.active
+mandate_paused   -> mandate.paused
+mandate_resumed  -> mandate.resumed
+mandate_revoked  -> mandate.revoked
+mandate_completed -> (no webhook — see below)
+```
+
+The charge pipeline (`apps/relayer/src/pipeline.ts`, Phase 12a) already enqueues `mandate.completed`
+synchronously in the same DB transaction as the charge that completes the mandate — strictly more
+timely than any poll loop, and already tested. `mandate-index-sync.ts`'s `EVENT_TO_WEBHOOK` table has
+no entry for `mandate_completed`, so the indexer updates `MandateIndex.status` to `"Completed"` when
+it observes that event (chain remains authoritative for status) but never enqueues a second webhook
+for it. **The charge pipeline is the sole producer of `mandate.completed`.**
+`indexer/mandate-index-sync.test.ts`'s "does not duplicate mandate.completed" test seeds a
+pipeline-style random-`eventId` delivery row first, then runs the indexer over the corresponding
+on-chain event, and asserts the `mandate.completed` count for that merchant stays at exactly 1.
+
+### Deterministic event id and idempotency (decision #3)
+
+`WebhookDelivery.eventId` for every indexer-produced row is `chain:<rpc event id>`. Soroban RPC's own
+event `id` (e.g. `"0016545579823816704-0000000000"`, observed on real testnet — see the real-testnet
+proof below) is derived purely from ledger/transaction/operation/event position, never anything
+random, so two indexer instances (or one instance reprocessing an already-applied range after a
+restart) observing the identical on-chain event always compute the identical `eventId`. The insert
+uses `createMany({ skipDuplicates: true })` (`webhook.ts::enqueueDeterministicWebhook`) rather than a
+plain `create()` — a duplicate `eventId` is a harmless no-op insert, never a thrown unique-constraint
+error that would poison the enclosing transaction (`tasks/lessons.md`'s insert-or-read-existing
+note). `MandateIndex`'s own upsert is a single atomic `INSERT ... ON CONFLICT ("mandateId") DO UPDATE
+... WHERE "lastIndexedLedger" IS NULL OR "lastIndexedLedger" <= EXCLUDED."lastIndexedLedger"` — chain
+wins, and the `WHERE` guard makes an out-of-order/replayed event a safe no-op rather than a
+regression. Both a same-event reprocess and two concurrent indexer instances racing an overlapping
+range are covered directly by `indexer/indexer.test.ts`/`indexer/mandate-index-sync.test.ts` against
+a real Postgres.
+
+### Merchant resolution and isolation (decision #6)
+
+`mandate-index-sync.ts::resolveMerchant` prefers the existing `MandateIndex` row's own `merchantId`
+(set once, from verified on-chain data) when one exists; otherwise it resolves by the event's
+`merchant` address against `Merchant.walletAddress`. An event whose merchant address matches no
+`Merchant` row in this deployment cannot be attributed to anyone — `MandateIndex.merchantId` is a
+required FK, so there is nothing valid to create a row against — and is logged and skipped rather
+than guessed at. This is also what makes cross-merchant isolation structural rather than a
+convention: a webhook can only ever be enqueued for the one merchant an event's own resolved
+`merchantId` points to, proven directly (two merchants, one event, only one gets a delivery row) in
+`indexer/mandate-index-sync.test.ts`.
+
+### Cold-start asset backfill
+
+`MandateIndex.assetAddress` is a required column, but only `mandate_created` carries the asset in
+its event data. A non-creation event (e.g. `mandate_paused`) observed with no existing `MandateIndex`
+row for that mandate — a genuine cold-start case, such as the indexer's lookback window starting
+after the mandate's creation — triggers exactly one fresh `get_mandate` read (reusing the relayer's
+existing `ChainGateway`, no second RPC client) to fill in the real on-chain asset rather than
+fabricating a placeholder (decision #4: chain is the only source of truth, including when
+backfilling a row for the first time).
+
+### Cursor persistence and retention-gap detection (decisions #1, #2)
+
+A dedicated `IndexerCursor` table (one global row, `prisma/schema.prisma` — see that model's doc
+comment), not a field on `MandateIndex`: the poll cursor is a single property of the whole contract's
+event stream, while `MandateIndex.lastIndexedLedger` is per-*mandate*. `cursor` is Soroban RPC's own
+opaque continuation token (the actual resume position); `lastLedger` is a best-effort human-readable
+high-water mark used only for the gap check below, never for resuming pagination.
+
+On the very first run ever (no stored cursor), the indexer starts from `currentLedger -
+DEFAULT_INITIAL_LOOKBACK_LEDGERS` (100 ledgers, ~8 minutes at 5s/ledger) — a deliberate scoping
+decision: this indexer does not attempt a full historical backfill beyond a small window on cold
+start. It exists to keep the index and webhooks current going forward, not to replay months of
+history; the lookback and page-size are constructor parameters (`IndexerDeps.initialLookbackLedgers`/
+`pageLimit`), not environment variables, since nothing beyond the code's own sane defaults needed
+tuning for this phase's scope.
+
+**Retention-gap detection is two independent checks, both throwing the same
+`IndexerRetentionGapError`, and neither ever silently skips ahead:**
+
+1. A heuristic match on the `getEvents` call itself throwing an error whose message mentions common
+   Soroban RPC wording for an invalid/pruned position (`"oldest ledger"`, `"cursor"`,
+   `"start ledger"`, etc.) — best-effort and explicitly documented as such, since this repo's
+   contract was deployed only ~2 days before this indexer was built, so the *exact* error text a
+   genuinely 7-day-stale cursor produces has not been observed against live infrastructure.
+2. A **more robust, response-shape-independent** check: on every successful response, if the RPC's
+   own `oldestLedger` has advanced past `storedCursor.lastLedger + 1`, ledgers in between were pruned
+   before this indexer could read them, regardless of whether the call itself errored.
+
+Either condition throws before the cursor is advanced, so the next tick fails identically until an
+operator intervenes — there is no automatic "skip the gap and continue" path, which is the one thing
+decision #1 explicitly forbids. `indexer/indexer.test.ts` proves both paths with a fake gateway that
+can either throw on demand or report an arbitrary `oldestLedger`; the true 7-day-stale-RPC-error
+scenario itself remains unverified against live infrastructure (a real architectural finding, not a
+gap in test coverage — see this phase's final report for the honest caveat).
+
+### Real-testnet proof
+
+`scripts/verify-indexer-testnet.ts` creates a fresh mandate and immediately pauses it (both
+payer-signs-and-submits, no token allowance needed — neither call moves funds), then runs the actual
+`runIndexerTick` (`createSorobanChainEventsGateway`, real Soroban RPC) against real testnet. Real
+result: `mandate_created` (event id `0016545579823816704-0000000000`) and `mandate_paused` (event id
+`0016545584118796288-0000000000`) were both decoded and applied in one tick, producing
+`MandateIndex.status = "Paused"` and exactly one `mandate.active` + one `mandate.paused`
+`WebhookDelivery` row for the correct merchant — see `tasks/todo.md`'s Phase 12c `## Review` entry
+for the full transcript (mandate id, both real transaction hashes).

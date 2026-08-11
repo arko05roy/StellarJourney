@@ -21,6 +21,7 @@ export const CONTRACT_CLIENT_PACKAGE_NAME = "@paymap/contract-client" as const;
 export * from "./domain.js";
 export * from "./deployment-registry.js";
 export * from "./client.js";
+export * from "./events.js";
 
 export type {
   Mandate as GeneratedMandate,

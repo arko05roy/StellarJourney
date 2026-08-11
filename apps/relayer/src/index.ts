@@ -22,6 +22,8 @@ import type { Logger } from "./pipeline.js";
 import { createWebhookDeliveryWorker } from "./webhook-worker.js";
 import { createWebhookDeliveryQueue } from "./webhook-queue.js";
 import { startWebhookScheduler } from "./webhook-scheduler.js";
+import { createSorobanChainEventsGateway } from "./indexer/chain-events-gateway.js";
+import { startIndexerScheduler } from "./indexer/scheduler.js";
 
 const consoleLogger: Logger = (level, event, fields) => {
   const line = `[relayer] ${event} ${JSON.stringify(fields)}`;
@@ -62,11 +64,19 @@ async function main(): Promise<void> {
   });
   const stopWebhookScheduler = startWebhookScheduler(prisma, webhookQueue);
 
+  // Phase 12c — on-chain event indexer. Reuses `gateway` (already exposes
+  // `getMandate`) as the `MandateReader` for the cold-start asset-backfill
+  // case (mandate-index-sync.ts) rather than standing up a second RPC
+  // client for the same read.
+  const eventsGateway = createSorobanChainEventsGateway({ rpcUrl: config.deployment.rpcUrl, contractId: config.deployment.contractId });
+  const stopIndexerScheduler = startIndexerScheduler({ prisma, events: eventsGateway, mandateReader: gateway, logger: consoleLogger });
+
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       void (async () => {
         stopScheduler();
         stopWebhookScheduler();
+        stopIndexerScheduler();
         await worker.close();
         await webhookWorker.close();
         await queue.close();

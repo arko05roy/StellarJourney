@@ -627,3 +627,23 @@
   server, never client-side-validated) — don't copy that pattern into a
   form whose client-side validation (this repo's `validateProductForm`,
   for one) genuinely checksum-checks the address before allowing submit.
+- The "a browser-bundled package's barrel re-exports a Node-only sibling"
+  failure mode (`node:fs`/`node:path`/`node:url` leaking into a Next.js
+  Client Component's bundle via a *value* import through a barrel) recurs
+  transitively, one layer removed from where the Node-only module actually
+  lives. Adding `packages/stellar/src/events.ts` (which itself only imports
+  from `@paymap/contract-client`'s *root* barrel — not Node-only on its own)
+  to `packages/stellar/src/index.ts`'s own barrel broke `apps/web`'s
+  `next build` (`UnhandledSchemeError: Reading from "node:fs"`), because
+  `contract-client`'s root barrel re-exports `deployment-registry.js`
+  (`node:fs`) and `apps/web` already value-imports from `@paymap/stellar`'s
+  root. The fix from the original lesson (add a narrow subpath export,
+  `./events`, on the *inner* package and import that instead of its root)
+  applies exactly the same way one level up — but the bug has to be
+  hunted down at `pnpm build` time (a real Next.js webpack error, not a
+  typecheck or lint failure) since neither `tsc` nor `eslint` catch a
+  transitive Node-only import reaching a browser bundle. Rule of thumb:
+  before adding any new module to a package's root barrel, check whether
+  that new module's own imports (even indirectly, through another
+  workspace package's root) touch a Node builtin, and if so, add/consume a
+  subpath export instead of touching the barrel.

@@ -1799,3 +1799,112 @@ this phase, correctly reflected as "Not wired yet" in the dashboard's event-cove
 than silently implied). No pagination UI for any list view (all currently render up to their
 endpoint's `limit` in one page) — acceptable for this MVP's expected scale, flagged for a future
 phase if a merchant's history grows large.
+
+---
+
+## Phase 12c — On-chain event indexer
+
+**Goal:** give the 4 producer-less `mandate.*` webhook events (`mandate.active`/`mandate.paused`/
+`mandate.resumed`/`mandate.revoked`) a real producer by polling Soroban RPC's `getEvents` for the
+mandate-registry contract's own lifecycle events, and stop `MandateIndex` from going stale when a
+payer acts directly from their wallet.
+
+- [x] `packages/contract-client/src/events.ts` (+ `./events` subpath export) — decodes the 5
+      `#[contractevent]`s into a typed `MandateLifecycleEvent` union, verified against
+      `soroban-sdk-macros-27.0.2`'s actual wire format (topics = `[name, mandate_id, payer,
+      merchant]`, data = a field-name-keyed `ScvMap`), not assumed.
+- [x] `packages/stellar/src/events.ts` — `fetchMandateLifecycleEvents`/`getCurrentLedgerSequence`,
+      thin `rpc.Server.getEvents()` wrapper, imports `contract-client`'s `./events` subpath (not
+      root) to avoid dragging `node:fs` into any browser bundle.
+- [x] `prisma/schema.prisma`: `IndexerCursor` model (one global row) — durable poll-cursor
+      persistence, deliberately separate from `MandateIndex.lastIndexedLedger` (per-mandate).
+      Migration `20260728230751_phase12c_indexer_cursor`.
+- [x] `apps/relayer/src/indexer/`: `chain-events-gateway.ts` (injected seam), `cursor.ts` (CAS
+      persistence), `mandate-index-sync.ts` (chain-wins atomic upsert + deterministic webhook
+      enqueue + merchant resolution/isolation + cold-start asset backfill), `indexer.ts` (one tick:
+      fetch -> retention-gap check -> apply events in order -> advance cursor), `scheduler.ts`
+      (`setInterval` loop, wired into `apps/relayer/src/index.ts` alongside the existing
+      charge/webhook schedulers).
+- [x] `apps/relayer/src/webhook.ts`: added `enqueueDeterministicWebhook` (idempotent
+      `createMany({skipDuplicates:true})` variant of the existing `enqueueChargeWebhook`) — reused by
+      the indexer, no second webhook mechanism.
+- [x] Event -> webhook map: `mandate_created`->`mandate.active`, `mandate_paused`->`mandate.paused`,
+      `mandate_resumed`->`mandate.resumed`, `mandate_revoked`->`mandate.revoked`. `mandate_completed`
+      deliberately maps to **no** webhook — the charge pipeline (Phase 12a) is the sole producer,
+      already synchronous and already tested; the indexer only updates `MandateIndex.status` to
+      `"Completed"` for that event.
+- [x] Deterministic event id: `chain:<rpc event id>` (Soroban RPC's own event id — ledger/tx/
+      operation/event-index derived, never random) — the `WebhookDelivery.eventId` unique constraint
+      is the backstop for exactly-once webhook production across reprocessing/concurrent indexers.
+- [x] Docs: `docs/architecture.md` (new "Phase 12c" section), `docs/merchant-api.md` (event
+      catalogue + producer table updated), `apps/web/src/app/merchant/webhooks/page.tsx`'s
+      `EVENT_PRODUCER_STATUS` table flipped to `producing: true` for the 4 events.
+
+**Tests:** 17 new `apps/relayer` tests (119 total, was 102) — `indexer/mandate-index-sync.test.ts`
+(10: unknown-merchant skip, create+enqueue, reuse-existing-merchant, chain-wins monotonic-ledger
+guard, same-event reprocess idempotency, two-concurrent-applies idempotency, merchant isolation,
+`mandate_completed` no-webhook, no-duplicate-with-pipeline, cold-start asset backfill) and
+`indexer/indexer.test.ts` (7: first-run lookback arithmetic, cursor resume after "restart",
+tick-level idempotency, same-ledger ordering, two-concurrent-indexer-instances overlapping range,
+two retention-gap paths — thrown RPC error and advanced-`oldestLedger`). Plus 11 new
+`packages/contract-client` tests (`events.test.ts`) decoding all 5 lifecycle events from
+`nativeToScVal`-built fixtures matching the macro's real wire shape, plus unrecognized-event/
+malformed-shape error cases. All against a real Postgres (`docker-compose.yml`), fake chain
+gateways — no live RPC in the default `pnpm test` run.
+
+**Real-testnet verification (`scripts/verify-indexer-testnet.ts`, actually run):** created a fresh
+mandate (`create_mandate` tx `e549dad8ef009151ca0e5dc063b02b79673927720f2a9f391a1713b85d9bd2ef`,
+mandate id `566f42dd4ff53cdbad4d526609d6156a82460ee14273af5308b74947512bf30d`), immediately paused it
+(`pause_mandate` tx `eb6d148932fd373944232bebbc9e8802282cb4b7a93bc5f687840837b07c5383`), then ran the
+real `runIndexerTick` (`createSorobanChainEventsGateway`, real Soroban RPC, no fake) against real
+testnet. Result: both events decoded and applied in one tick (`mandate_created` rpc event id
+`0016545579823816704-0000000000`, `mandate_paused` rpc event id `0016545584118796288-0000000000`),
+producing `MandateIndex.status = "Paused"` and exactly one `mandate.active` + one `mandate.paused`
+`WebhookDelivery` row (`pending`, correct merchant, `eventId` = `chain:<rpc event id>`). Full JSON
+output captured in this phase's session transcript.
+
+**Commands run (all passed):**
+```
+docker compose up -d
+pnpm install
+pnpm lint                            (16/16 tasks)
+pnpm typecheck                       (16/16 tasks)
+pnpm build                           (10/10 tasks — required fixing a real `next build` break, see
+                                       "Deviations" below)
+pnpm test                            (16/16 tasks; apps/relayer 119 [was 102], contract-client 23
+                                       [was 12], everything else unchanged)
+pnpm test:e2e                        (apps/web: 8/8 Playwright, unchanged)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-token, unchanged —
+                                       no contract changes this phase)
+```
+
+**Deviations / decisions:**
+- Chose **`IndexerCursor` as its own table** over `MandateIndex.lastIndexedLedger` — the poll cursor
+  is a single global property of the whole contract's event stream, not per-mandate; folding it into
+  a per-row field would mean every mandate row redundantly (and potentially inconsistently) carrying
+  the same global value.
+- **Retention-gap detection is heuristic on the error-message path** (pattern-matches common Soroban
+  RPC wording) — this repo's contract is only ~2 days old, so a genuinely 7-day-stale cursor's exact
+  error text was never observed against live infrastructure. The second, response-shape-based check
+  (`oldestLedger` advancing past the stored `lastLedger`) is response-format-independent and is the
+  one to trust more; both are tested with a fake gateway, neither against a real induced gap.
+- **No new required or optional env vars** — poll interval (15s), initial lookback (100 ledgers),
+  and page size (100) are code-level defaults passed as `IndexerDeps`/`startIndexerScheduler`
+  parameters, not `process.env` reads. Kept deliberately minimal per this phase's scope; revisit if
+  operators need to tune them without a code change.
+- Adding `packages/stellar/src/events.ts` (which depends on `@paymap/contract-client`'s root export)
+  to `packages/stellar/src/index.ts`'s barrel broke `apps/web`'s `next build`
+  (`UnhandledSchemeError: Reading from "node:fs"`) — the same "barrel re-exports a Node-only sibling"
+  failure mode `tasks/lessons.md` already documents, recurring one layer up (`packages/stellar`'s own
+  barrel, not just `contract-client`'s). Fixed by adding a `./events` subpath export to
+  `packages/contract-client/package.json` and importing that instead of the root — confirmed by a
+  clean `pnpm build` afterward. Lesson appended to `tasks/lessons.md`.
+
+**Unverified / left for later phases:** the true "cursor fell outside the RPC's ~7-day retention
+window" scenario was never triggered against real infrastructure (would require a cursor that is
+actually days stale) — the heuristic error-matching path is untested against a real error string,
+only against a synthetic one in `indexer/indexer.test.ts`. `refund.succeeded` still has no producer
+(needs a relayer refund-execution pipeline, out of this phase's scope). No pagination or UI surface
+for indexer-produced events specifically beyond the existing webhook-deliveries list.

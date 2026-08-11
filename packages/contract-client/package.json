@@ -17,6 +17,10 @@
     "./domain": {
       "types": "./dist/domain.d.ts",
       "default": "./dist/domain.js"
+    },
+    "./events": {
+      "types": "./dist/events.d.ts",
+      "default": "./dist/events.js"
     }
   },
   "scripts": {

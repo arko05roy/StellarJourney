@@ -543,20 +543,43 @@ This is the honest current state, not the aspirational one:
 | --- | --- | --- |
 | `payment.succeeded` | `apps/relayer`'s charge pipeline (Phase 9) | Enqueued in the same DB transaction as the `succeeded` transition. |
 | `payment.failed` | `apps/relayer`'s charge pipeline (Phase 9) | Enqueued on `permanently_failed` only — a `retry_scheduled` failure does not fire a webhook per attempt. |
-| `mandate.completed` | `apps/relayer`'s charge pipeline (Phase 12a) | Detected without an event indexer: the pipeline already holds the *pre-charge* on-chain `Mandate` (fresh read, step 2) with `successfulCharges`/`maxSuccessfulCharges`; a successful charge that brings the count to exactly the max deterministically completed the mandate (the contract never allows a charge that would exceed it), so the webhook is enqueued alongside `payment.succeeded` in that case. |
-| `mandate.active` | **none** | Fires (per PLAN.md) on mandate creation — but `create_mandate` is signed and submitted directly from the payer's wallet in the consumer checkout UI (Phase 10), never routed through this API. Nothing observes it. |
-| `mandate.paused` / `mandate.resumed` / `mandate.revoked` | **none** | Same reason — the consumer dashboard (Phase 11) calls `pause_mandate`/`resume_mandate`/`revoke_mandate` directly from the payer's wallet. This API only ever *reads* mandate state (`GET /v1/mandates/:id`); it has no way to know a state change happened unless something tells it. |
+| `mandate.completed` | `apps/relayer`'s charge pipeline (Phase 12a) — **sole producer, see note below** | Detected without an event indexer: the pipeline already holds the *pre-charge* on-chain `Mandate` (fresh read, step 2) with `successfulCharges`/`maxSuccessfulCharges`; a successful charge that brings the count to exactly the max deterministically completed the mandate (the contract never allows a charge that would exceed it), so the webhook is enqueued alongside `payment.succeeded` in that case. |
+| `mandate.active` | `apps/relayer`'s on-chain event indexer (Phase 12c) | Indexes the contract's own `mandate_created` event — see below. |
+| `mandate.paused` / `mandate.resumed` / `mandate.revoked` | `apps/relayer`'s on-chain event indexer (Phase 12c) | Indexes `mandate_paused`/`mandate_resumed`/`mandate_revoked` — see below. |
 | `refund.succeeded` | **none** | `POST /v1/payments/:id/refunds` only ever creates a `RefundRequest` row in `scheduled` (see that endpoint's docs above) — no relayer pipeline exists yet that actually submits a `refund` transaction on-chain and confirms it. There is no "succeeded" to report. |
 
-Closing the four `mandate.*` gaps for real requires one of: (a) an on-chain event indexer polling
-Soroban `get_events` and reconciling against `MandateIndex`, or (b) each direct-to-contract wallet
-action in `apps/web` also calling a new authenticated-but-verified backend endpoint afterward
-(mirroring `POST /checkout-sessions/:id/mandate`'s "trust nothing, re-verify on-chain" pattern).
-Both are real scope, not a one-line fix, and are deliberately **not** built as part of Phase 12a —
-building a full indexer to serve one webhook event would be exactly the "quietly stub it" this
-project's process explicitly says not to do. `refund.succeeded` similarly needs a full relayer
-refund-execution pipeline (the on-chain-submission mirror of the Phase 9 charge pipeline) before it
-can have a producer at all.
+### On-chain event indexer (Phase 12c) — how the 4 `mandate.*` lifecycle events got a producer
+
+`create_mandate`/`pause_mandate`/`resume_mandate`/`revoke_mandate` are signed and submitted directly
+from the payer's wallet (Phase 10/11) — never routed through this API — so nothing observed them
+until this phase. `apps/relayer/src/indexer` polls Soroban RPC's `getEvents` for the
+mandate-registry contract's own `#[contractevent]`s (`contracts/mandate-registry/src/events.rs`),
+decodes the 5 mandate-lifecycle events, and:
+
+1. Upserts `MandateIndex` from the observed event — chain always wins, keyed by a monotonic ledger
+   guard so an out-of-order/replayed event can never regress a row to stale state.
+2. Enqueues the mapped webhook (`mandate_created` -> `mandate.active`, `mandate_paused` ->
+   `mandate.paused`, `mandate_resumed` -> `mandate.resumed`, `mandate_revoked` -> `mandate.revoked`)
+   through the same `WebhookDelivery` path Phase 12a's delivery worker already drains — **no second
+   webhook mechanism**.
+
+**`mandate_completed` is the one event this indexer deliberately does not turn into a webhook.**
+The charge pipeline already enqueues `mandate.completed` synchronously, in the same transaction as
+the charge that completed the mandate — strictly more timely than any poll loop, and the indexer
+observing the same on-chain `mandate_completed` event moments later would otherwise produce a
+second, redundant `mandate.completed` delivery. The indexer still updates `MandateIndex.status` to
+`"Completed"` when it sees this event (chain remains authoritative for status), it just never
+enqueues a webhook for it — see `apps/relayer/src/indexer/mandate-index-sync.ts`'s module doc for
+the full reasoning.
+
+Deterministic idempotency: `WebhookDelivery.eventId` for every indexer-produced event is
+`chain:<rpc event id>` — Soroban RPC's own event id is derived purely from ledger/transaction/
+operation/event position, so two indexer instances (or one instance reprocessing after a restart)
+observing the identical on-chain event always compute the identical `eventId`, and the table's
+unique constraint collapses any duplicate into a no-op insert.
+
+Cursor persistence, restart resumption, and retention-gap detection: see
+`docs/architecture.md`'s "Phase 12c — On-chain event indexer" section.
 
 ### Signature scheme
 

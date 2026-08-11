@@ -289,6 +289,25 @@ model RefundRequest {
   @@index([paymentId])
 }
 
+/// Phase 12c — durable poll cursor for the on-chain event indexer
+/// (`apps/relayer/src/indexer`). A single global row (id = the contract's own
+/// name, see `apps/relayer/src/indexer/cursor.ts`'s `INDEXER_CURSOR_ID`) —
+/// deliberately its own table, not a field bolted onto `MandateIndex`:
+/// `MandateIndex.lastIndexedLedger` is per-*mandate* (when this one mandate
+/// row was last refreshed), while the poll cursor is a single property of the
+/// whole contract's event stream, shared across every mandate. Folding a
+/// global concept into a per-row field would mean N mandates each carrying a
+/// redundant (and potentially inconsistent) copy of the same global value.
+/// `cursor` is Soroban RPC's own opaque continuation token (the actual resume
+/// position); `lastLedger` is a best-effort human-readable high-water mark
+/// used only for the retention-gap check, never for resuming pagination.
+model IndexerCursor {
+  id         String   @id
+  lastLedger Int
+  cursor     String
+  updatedAt  DateTime @updatedAt
+}
+
 model WebhookDelivery {
   id            String                @id @default(uuid())
   merchantId    String

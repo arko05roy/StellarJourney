@@ -8,10 +8,11 @@ import { randomBytes } from "node:crypto";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import { decodeMandateErrorName, type MandateContractError } from "@paymap/stellar";
 import { encryptWebhookSecret, generateWebhookSecret } from "@paymap/shared";
-import type { Mandate, PaymentReceipt } from "@paymap/contract-client";
+import type { Mandate, MandateLifecycleEvent, MandateLifecycleEventKind, PaymentReceipt } from "@paymap/contract-client";
 import { MandateReadError } from "@paymap/contract-client";
 import { createPrismaClient, type PrismaClient } from "../db.js";
 import type { ChainGateway, ChargeArgs, ChargeSubmitResult, PreparedCharge } from "../chain-gateway.js";
+import type { ChainEventsGateway, ChainEventsGetParams, ChainEventsPage } from "../indexer/chain-events-gateway.js";
 
 export function createTestPrisma(): PrismaClient {
   return createPrismaClient();
@@ -49,6 +50,7 @@ export async function createMerchantWithWebhook(prisma: PrismaClient, webhookUrl
  * `apps/relayer`'s own model set.
  */
 export async function cleanDatabase(prisma: PrismaClient): Promise<void> {
+  await prisma.indexerCursor.deleteMany();
   await prisma.webhookDelivery.deleteMany();
   await prisma.idempotencyKey.deleteMany();
   await prisma.refundRequest.deleteMany();
@@ -236,6 +238,109 @@ export class FakeChainGateway implements ChainGateway {
         this.submitCallLog.push(args);
         return this.submitResult(args);
       },
+    };
+  }
+}
+
+/** Bare `Merchant` fixture (no product/checkout-session) — the minimum row set the Phase 12c indexer tests need for merchant resolution/isolation. */
+export async function createMerchant(
+  prisma: PrismaClient,
+  overrides: { walletAddress?: string; name?: string } = {},
+): Promise<{ id: string; walletAddress: string }> {
+  const walletAddress = overrides.walletAddress ?? randomStellarAccountAddress();
+  const merchant = await prisma.merchant.create({ data: { name: overrides.name ?? "Test Merchant", walletAddress } });
+  return { id: merchant.id, walletAddress };
+}
+
+/**
+ * Builds a decoded {@link MandateLifecycleEvent} fixture directly (bypassing
+ * XDR construction — that decode path is proven separately in
+ * `@paymap/contract-client`'s own `events.test.ts`). Indexer-level tests care
+ * about `mandate-index-sync.ts`/`indexer.ts`'s logic given an already-decoded
+ * event, not re-proving the decoder.
+ */
+export function buildLifecycleEvent(overrides: {
+  kind: MandateLifecycleEventKind;
+  mandateId?: string;
+  payer?: string;
+  merchant?: string;
+  timestamp?: bigint;
+  ledger?: number;
+  txHash?: string;
+  rpcEventId?: string;
+  asset?: string;
+  successfulCharges?: number;
+}): MandateLifecycleEvent {
+  const ledger = overrides.ledger ?? 1000;
+  const common = {
+    mandateId: overrides.mandateId ?? randomHexId32(),
+    payer: overrides.payer ?? randomStellarAccountAddress(),
+    merchant: overrides.merchant ?? randomStellarAccountAddress(),
+    timestamp: overrides.timestamp ?? 1_700_000_000n,
+    ledger,
+    txHash: overrides.txHash ?? randomHexId32(),
+    rpcEventId: overrides.rpcEventId ?? `${String(ledger)}-0`,
+  };
+  if (overrides.kind === "mandate_created") {
+    return { ...common, kind: "mandate_created", asset: overrides.asset ?? randomStellarContractAddress() };
+  }
+  if (overrides.kind === "mandate_completed") {
+    return { ...common, kind: "mandate_completed", successfulCharges: overrides.successfulCharges ?? 1 };
+  }
+  return { ...common, kind: overrides.kind };
+}
+
+/**
+ * Deterministic in-memory `ChainEventsGateway` (mirrors `FakeChainGateway`
+ * above). Paginates a fixed in-memory event list by a synthetic `idx:<N>`
+ * cursor — a simple, fully test-controlled stand-in for Soroban RPC's own
+ * opaque cursor semantics. `oldestLedger` and `nextError` are directly
+ * mutable so a test can simulate a retention gap either way (a thrown RPC
+ * error, or a successful response whose `oldestLedger` has advanced past
+ * what the indexer last processed).
+ */
+export class FakeChainEventsGateway implements ChainEventsGateway {
+  oldestLedger = 1;
+  nextError: Error | undefined;
+  readonly calls: ChainEventsGetParams[] = [];
+
+  constructor(
+    public events: MandateLifecycleEvent[] = [],
+    public currentLedger = 10_000,
+  ) {}
+
+  async getCurrentLedger(): Promise<number> {
+    return this.currentLedger;
+  }
+
+  async getEvents(params: ChainEventsGetParams): Promise<ChainEventsPage> {
+    this.calls.push(params);
+    if (this.nextError) {
+      const error = this.nextError;
+      this.nextError = undefined;
+      throw error;
+    }
+
+    let startIndex: number;
+    if (params.cursor !== undefined) {
+      startIndex = Number(params.cursor.slice("idx:".length));
+    } else {
+      const startLedger = params.startLedger ?? 0;
+      const found = this.events.findIndex((e) => e.ledger >= startLedger);
+      startIndex = found === -1 ? this.events.length : found;
+    }
+
+    const limit = params.limit ?? 100;
+    const page = this.events.slice(startIndex, startIndex + limit);
+    const nextIndex = startIndex + page.length;
+    const pageMaxLedger = page.length > 0 ? Math.max(...page.map((e) => e.ledger)) : undefined;
+
+    return {
+      events: page,
+      cursor: `idx:${String(nextIndex)}`,
+      latestLedger: this.currentLedger,
+      oldestLedger: this.oldestLedger,
+      pageMaxLedger,
     };
   }
 }

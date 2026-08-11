@@ -10,7 +10,8 @@
     "test": "echo \"no tests yet\" && exit 0",
     "deploy:testnet": "tsx deploy-testnet.ts",
     "demo:mandate": "tsx create-demo-mandate.ts",
-    "demo:relayer": "tsx run-relayer-testnet-demo.ts"
+    "demo:relayer": "tsx run-relayer-testnet-demo.ts",
+    "verify:indexer": "tsx verify-indexer-testnet.ts"
   },
   "dependencies": {
     "@paymap/contract-client": "workspace:*",
