@@ -17,6 +17,10 @@ export default tseslint.config(
       "**/target/**",
       "**/playwright-report/**",
       "**/generated/**",
+      // Next.js-generated, explicitly "should not be edited" (its own
+      // header comment says so) — its triple-slash references trip
+      // @typescript-eslint/triple-slash-reference and it isn't ours to fix.
+      "**/next-env.d.ts",
     ],
   },
   js.configs.recommended,

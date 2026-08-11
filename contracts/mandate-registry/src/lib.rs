@@ -1,8 +1,24 @@
-//! Placeholder for the mandate-registry contract. Real mandate lifecycle,
-//! charge, and refund methods land starting Phase 1 (see PLAN.md, CLAUDE.md
-//! §6). This crate exists in Phase 0 only to prove the Rust workspace,
-//! release profile, and wasm32v1-none build target are wired correctly.
+//! `mandate-registry`: the Soroban contract that enforces bounded,
+//! replay-safe recurring-payment mandates (PLAN.md §10, CLAUDE.md §6-§8).
+//! This contract is the protocol's policy authority — the backend database
+//! and relayer are never trusted over its on-chain state.
+//!
+//! Phase 1 scope (this file's current state): canonical data types, the
+//! frozen error-code table, the persistent storage layer, deterministic id
+//! derivation, and checked arithmetic helpers. No lifecycle or charge logic
+//! yet — `create_mandate`, `pause_mandate`, `resume_mandate`,
+//! `revoke_mandate` land in Phase 2, `charge` in Phase 3, `refund` in Phase
+//! 5 (see tasks/todo.md).
 #![no_std]
+
+pub mod error;
+pub mod id;
+pub mod math;
+pub mod storage;
+pub mod types;
+
+#[cfg(test)]
+mod test;
 
 use soroban_sdk::{contract, contractimpl, Env};
 
@@ -11,24 +27,9 @@ pub struct MandateRegistry;
 
 #[contractimpl]
 impl MandateRegistry {
-    /// Trivial health-check method. Replaced by create_mandate / charge /
-    /// refund etc. in later phases.
+    /// Trivial health-check method carried over from Phase 0. Replaced by
+    /// `create_mandate` / `charge` / `refund` etc. starting Phase 2.
     pub fn ping(_env: Env) -> u32 {
         1
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::{MandateRegistry, MandateRegistryClient};
-    use soroban_sdk::Env;
-
-    #[test]
-    fn ping_returns_one() {
-        let env = Env::default();
-        let contract_id = env.register(MandateRegistry, ());
-        let client = MandateRegistryClient::new(&env, &contract_id);
-
-        assert_eq!(client.ping(), 1);
     }
 }
