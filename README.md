@@ -17,7 +17,7 @@ Recurring stablecoin payments with limits enforced by a Soroban contract. Payers
 | Live API and monitoring        | Ready         | [Readiness](https://paymap-demo-api.onrender.com/readyz) · [Prometheus metrics](https://paymap-demo-api.onrender.com/metrics)       |
 | Testnet contract               | Ready         | `CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22`                                                                          |
 | Contract interaction           | Ready         | [`charge` transaction](https://stellar.expert/explorer/testnet/tx/86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c) |
-| CI/CD                          | Ready         | [Green `main` workflow](https://github.com/SachPlayZ/Paymap/actions/runs/30532887659)                                               |
+| CI/CD                          | Ready         | [Green `main` workflow](https://github.com/SachPlayZ/Paymap/actions/runs/30534296778)                                               |
 | Pitch deck                     | Ready         | [Download the professional Level 5 deck](docs/level-5/Paymap-Level-5-Pitch-Deck.pptx)                                               |
 | Testnet activity               | Ready         | [52 verified transactions](docs/level-5/evidence/testnet-stress-20260730045306-585217.csv)                                          |
 | Feedback workbook              | Template only | [Formula-backed workbook; currently 0 responses](docs/level-5/Paymap-User-Feedback-Analysis.xlsx)                                   |

@@ -59,7 +59,7 @@ review evidence is supplied.
 | Advanced smart contract development   | Ready  | Bounded mandates, lifecycle, accounting, refunds, replay protection, property tests                                           |
 | Inter-contract communication          | Ready  | Mandate registry invokes the Stellar Asset Contract for `transfer_from` / `transfer`                                          |
 | Event streaming and real-time updates | Ready  | Durable Soroban `getEvents` indexer with cursor, deduplication, ordering, and retention-gap handling                          |
-| CI/CD pipeline                        | Ready  | [`ci.yml`](../../.github/workflows/ci.yml) · [green main run](https://github.com/SachPlayZ/Paymap/actions/runs/30532887659)   |
+| CI/CD pipeline                        | Ready  | [`ci.yml`](../../.github/workflows/ci.yml) · [green main run](https://github.com/SachPlayZ/Paymap/actions/runs/30534296778)   |
 | Smart-contract deployment workflow    | Ready  | [`deploy-testnet.ts`](../../scripts/deploy-testnet.ts) · [`testnet.json`](../../deployments/testnet.json)                     |
 | Mobile responsive frontend            | Ready  | [`product-ui-mobile.png`](evidence/product-ui-mobile.png)                                                                     |
 | Error handling and loading states     | Ready  | Typed contract/API errors, route boundaries, skeletons, pending controls, retries                                             |

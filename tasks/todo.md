@@ -2362,7 +2362,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] Capture missing public screenshots that can be produced from real project state.
 - [x] Consolidate submission links, evidence, and blockers in the README and evidence tracker.
 - [x] Run documentation/link, artifact, and local code verification.
-- [ ] Commit and push verified improvements to `main`; confirm CI remains green.
+- [x] Commit and push verified improvements to `main`; confirm CI remains green.
 
 ### Verification
 
@@ -2374,7 +2374,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] XLSX opens, formulas inspect cleanly, and contains no fabricated responses
 - [x] README links resolve
 - [x] Relevant lint, typecheck, tests, and build
-- [ ] GitHub Actions `CI` succeeds on final `main`
+- [x] GitHub Actions `CI` succeeds on final `main`
 
 ### Files likely touched
 
@@ -2405,6 +2405,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - Testnet contract interface and successful charge transaction.
 - Node lint, typecheck, build, and tests; Rust fmt, clippy, tests, and WASM build.
 - PPTX render/overflow checks; workbook formulas; local Markdown links; screenshot dimensions.
+- GitHub Actions run `30534296778` passed on `main`.
 
 #### Risks
 
