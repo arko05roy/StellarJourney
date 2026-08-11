@@ -128,3 +128,40 @@
   soon-to-be-shadowed check returns and update their expectations — and add
   a fresh bypass-based (direct storage write) test proving the shadowed
   check still independently fires, so it doesn't go silently untested.
+- `soroban_sdk::token::TokenClient::transfer`'s real signature is
+  `fn transfer(env, from: Address, to: MuxedAddress, amount: i128)` — this
+  was flagged as a risk in an earlier lesson before any caller existed, and
+  it mattered the moment `refund` added one. `MuxedAddress::from(&Address)`
+  (or `.into()`) wraps a non-multiplexed address as the *same underlying
+  `AddressObject` value* an `Address`-typed parameter expects, so it decodes
+  correctly even against a test-double contract method that still declares
+  `to: Address` (didn't need to change `mock-token`'s simplified signature).
+  Clippy's `needless_borrows_for_generic_args` will flag
+  `&MuxedAddress::from(&x)` passed where `&MuxedAddress` might look required
+  — the client wrapper accepts the owned value directly; drop the extra `&`.
+- A single `Address::require_auth()` call only authorizes *one point* in the
+  call graph (the current contract invocation's own function + args). If
+  your function calls `require_auth()` once and then invokes another
+  contract whose method *also* calls `require_auth()` on the same address
+  (e.g. `refund`'s explicit `mandate.merchant.require_auth()` followed by
+  `TokenClient::transfer`'s internal `from.require_auth()` where
+  `from == merchant`), that is TWO separate auth requirements needing one
+  signed tree, not one requirement satisfied twice. In tests, build a
+  `MockAuthInvoke` with the nested call as a `sub_invokes` entry under the
+  root — a flat `sub_invokes: &[]` on the root call will fail the nested
+  call's own `require_auth()` with no matching entry. This is easy to miss
+  because `charge`'s `transfer_from(spender = contract_address, ...)` never
+  needed this (the contract auto-authorizes as its own spender), so the
+  precedent in this codebase before Phase 5 had no two-level auth example to
+  copy from.
+- Before assuming a test-only mock contract's failure-injection flag (e.g.
+  `mock-token`'s `set_fail_transfers`) covers every method you're about to
+  add a new caller for, check which methods actually read the flag. Adding a
+  second real caller of a previously-untested method (Phase 5's `refund`
+  calling plain `transfer`, where only `transfer_from` had ever been called
+  through `TokenClient` before) can silently produce a rollback test that
+  never actually triggers a trap — it "passes" only because the transfer
+  quietly succeeds instead of failing, and `expect_panic`'s assertion that a
+  panic occurred is what catches this, not a silent false-positive. Wire the
+  flag into the new method first, and add a direct unit test for it in the
+  mock contract's own test module.

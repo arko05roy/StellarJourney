@@ -124,3 +124,26 @@ pub struct ChargeSucceeded {
     pub successful_charge_number: u32,
     pub timestamp: u64,
 }
+
+/// Emitted by `refund` (Phase 5) once a refund has been durably recorded —
+/// i.e. only after `TokenClient::transfer` (merchant -> payer) succeeded,
+/// `RefundedTotal` was updated, and the `RefundReceipt` was stored. Same
+/// topic convention as `ChargeSucceeded`. `refunded_total_after` is the
+/// cumulative refunded amount for `payment_id` *after* this refund, so an
+/// indexer never has to sum receipts itself to know whether a payment is
+/// fully refunded.
+#[contractevent]
+pub struct RefundSucceeded {
+    #[topic]
+    pub mandate_id: BytesN<32>,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub merchant: Address,
+    pub refund_id: BytesN<32>,
+    pub payment_id: BytesN<32>,
+    pub asset: Address,
+    pub amount: i128,
+    pub refunded_total_after: i128,
+    pub timestamp: u64,
+}

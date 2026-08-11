@@ -1,8 +1,8 @@
 //! `mock-token`: a minimal SEP-41/SAC-shaped token contract used **only** by
 //! `mandate-registry`'s Phase 3+ integration tests to exercise `allowance`,
-//! `balance`, and `transfer_from` against something that behaves like the
-//! Stellar Asset Contract (`soroban_sdk::token::TokenClient` compatible
-//! function names, argument order, and types).
+//! `balance`, `transfer`, and `transfer_from` against something that behaves
+//! like the Stellar Asset Contract (`soroban_sdk::token::TokenClient`
+//! compatible function names, argument order, and types).
 //!
 //! # This contract is TEST-ONLY. Never deploy it.
 //!
@@ -12,10 +12,12 @@
 //!    any address's balance. That is fine for seeding test fixtures and
 //!    would be a critical vulnerability in a real token.
 //! 2. `set_fail_transfers` exists purely so tests can prove
-//!    `mandate-registry`'s "a failed transfer must not mutate mandate
+//!    `mandate-registry`'s "a failed transfer must not mutate mandate/refund
 //!    accounting" rollback invariant (CLAUDE.md §6, §7 Tokens) by forcing a
-//!    real, deterministic `transfer_from` failure. No production token has
-//!    (or should have) a flag like this.
+//!    real, deterministic `transfer`/`transfer_from` failure (Phase 3's
+//!    charge rollback test uses `transfer_from`; Phase 5's refund rollback
+//!    test uses plain `transfer`). No production token has (or should have)
+//!    a flag like this.
 #![no_std]
 
 #[cfg(test)]
@@ -91,11 +93,21 @@ impl MockToken {
     }
 
     /// Matches `TokenClient::transfer` (simplified: `to: Address` rather
-    /// than `MuxedAddress`, since nothing in this project calls plain
-    /// `transfer` through the generic `TokenClient` — only `transfer_from`
-    /// is exercised that way). Provided for completeness / direct test use.
+    /// than `MuxedAddress` — see `refund.rs`'s module doc for why passing a
+    /// non-multiplexed `Address` through `MuxedAddress::from` still decodes
+    /// correctly against this narrower parameter type). Used by
+    /// `mandate-registry`'s Phase 5 `refund` (merchant -> payer, no
+    /// allowance involved). Honors `set_fail_transfers` exactly like
+    /// `transfer_from` does, so the refund rollback test can force a genuine
+    /// trap the same way the charge rollback test does.
     pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
         from.require_auth();
+        assert!(amount > 0, "mock-token: transfer amount must be positive");
+
+        if Self::fail_transfers_enabled(&env) {
+            panic!("mock-token: transfer forced to fail via set_fail_transfers(true)");
+        }
+
         Self::move_balance(&env, &from, &to, amount);
     }
 
@@ -297,6 +309,44 @@ mod test {
         client(&f).mint(&from, &50);
         approve_as(&f, &from, &spender, 1_000);
         transfer_from_as(&f, &spender, &from, &to, 200);
+    }
+
+    fn transfer_as(f: &Fixture, from: &Address, to: &Address, amount: i128) {
+        let invoke = MockAuthInvoke {
+            contract: &f.contract_id,
+            fn_name: "transfer",
+            args: (from.clone(), to.clone(), amount).into_val(&f.env),
+            sub_invokes: &[],
+        };
+        let auths = [MockAuth {
+            address: from,
+            invoke: &invoke,
+        }];
+        client(f).mock_auths(&auths).transfer(from, to, &amount);
+    }
+
+    #[test]
+    fn transfer_moves_balance_directly_no_allowance() {
+        let f = setup();
+        let from = Address::generate(&f.env);
+        let to = Address::generate(&f.env);
+        client(&f).mint(&from, &1_000);
+
+        transfer_as(&f, &from, &to, 400);
+
+        assert_eq!(client(&f).balance(&from), 600);
+        assert_eq!(client(&f).balance(&to), 400);
+    }
+
+    #[test]
+    #[should_panic(expected = "forced to fail")]
+    fn set_fail_transfers_forces_transfer_to_panic() {
+        let f = setup();
+        let from = Address::generate(&f.env);
+        let to = Address::generate(&f.env);
+        client(&f).mint(&from, &1_000);
+        client(&f).set_fail_transfers(&true);
+        transfer_as(&f, &from, &to, 200);
     }
 
     #[test]

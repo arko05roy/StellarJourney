@@ -108,15 +108,23 @@ the full rationale.
 
 ## Phase 5 — Refunds
 
-- [ ] `refund(mandate_id, payment_id, amount, refund_id) -> RefundReceipt` — merchant auth
-- [ ] Cumulative `refunded_total[payment_id]`; `refunded + amount <= payment.amount` else `RefundExceedsPayment`
-- [ ] `refund_id` replay guard → `DuplicateRefund`
-- [ ] Transfer merchant → payer; accounting only after success
-- [ ] `refund_succeeded` event
-- [ ] Decide: does refund decrement `total_collected` / `current_period_collected`? **Recommend no** — refunds do not restore spending headroom (prevents refund-cycle cap bypass). Document in `docs/contract-invariants.md`.
-- [ ] Tests: full, partial, partial×2 to exact total, over-refund, duplicate refund id, refund on revoked mandate (should still work), refund unknown payment
+- [x] `refund(mandate_id, payment_id, amount, refund_id) -> RefundReceipt` — merchant auth
+- [x] Cumulative `refunded_total[payment_id]`; `refunded + amount <= payment.amount` else `RefundExceedsPayment`
+- [x] `refund_id` replay guard → `DuplicateRefund` (global scope, not per-payment)
+- [x] Transfer merchant → payer; accounting only after success
+- [x] `refund_succeeded` event
+- [x] Decided: refund does **not** decrement `total_collected` / `current_period_collected` /
+      `successful_charges`, and does not un-complete a `Completed` mandate — refunds do not
+      restore spending headroom (prevents refund-cycle cap bypass). Documented in
+      `docs/contract-invariants.md` Phase 5 section.
+- [x] Tests: full, partial, partial×2 to exact total, over-refund, duplicate refund id (incl.
+      across different payments), refund on revoked/paused/expired/completed mandate (all still
+      work), refund unknown payment, refund payment belonging to a different mandate, auth
+      (payer/third-party rejected), rollback with real failing transfer + retry, refund of an
+      older payment leaving newer charge accounting untouched, event field assertions,
+      `get_refund`/`get_refunded_total` reads
 
-**Gate:** `cargo test --workspace`.
+**Gate:** `cargo test --workspace` — ran, all green (136 tests: 127 mandate-registry + 9 mock-token).
 
 **Invariants:** §7 Amounts (refund ≤ payment), §7 Replay (`refund_id` once).
 
@@ -633,3 +641,110 @@ pnpm build
 interactions with period/completion accounting are untested. The full CLAUDE.md §7
 invariant→test mapping remains Phase 6's property-test suite. No adversarial/malicious-token
 property testing beyond the existing single-failure-injection mock.
+
+### Phase 5 — Refunds (done)
+
+**What changed:** new `refund.rs` module (`refund`, `get_refund`, `get_refunded_total`)
+implementing the validation order specified by the lead exactly: mandate exists (no status
+check) → payment exists → payment belongs to `mandate_id` → `mandate.merchant.require_auth()` →
+`refund_id` unused (global scope) → `amount > 0` → cumulative refund ≤ payment amount (checked
+add) → merchant balance sufficient (advisory) → `TokenClient::transfer(from = merchant, to =
+payer, amount)` (never `transfer_from` — no allowance involved, merchant authorizes directly) →
+post-transfer: `RefundedTotal` write, `UsedRefund` mark, `RefundReceipt` store, `refund_succeeded`
+event. The payer/merchant/asset used for the transfer and the receipt come from the stored
+`PaymentReceipt`, never the mandate or call arguments. Per the lead's decision, the `Mandate`
+record itself is never written by `refund` — no headroom (`total_collected`,
+`current_period_collected`, `successful_charges`, `Completed` status) is ever restored by a
+refund; `refund.rs`'s module doc documents the anti-bypass rationale (charge→refund→charge
+looping to exceed period caps in real economic terms).
+
+`storage.rs` gained a `DataKey::Refund(refund_id)` key plus `get_refund`/`set_refund` helpers
+(persistent, same TTL policy as everything else). `events.rs` gained `RefundSucceeded` (full
+PLAN.md §11/§12-style field set: `refund_id`, `payment_id`, `mandate_id`, `payer`, `merchant`,
+`asset`, `amount`, `refunded_total_after`, `timestamp`). One new error code,
+`RefundNotFound = 24` — genuinely needed since `DuplicateRefund` (19) means the *opposite* thing
+(already-used, not not-found) and reusing it would misreport one deterministic failure as
+another; error 16 `InsufficientBalance`'s doc comment was broadened (not renumbered) to note it
+now also covers the merchant's balance in `refund`, same advisory role as in `charge`. `lib.rs`
+gained three new thin entrypoints (`refund`, `get_refund`, `get_refunded_total`) and the new
+module/test-module declarations.
+
+**Mock-token fix (test-fixture only, not a contract behavior change):** `mock-token`'s `transfer`
+function did not consult the `set_fail_transfers` flag at all — only `transfer_from` did, since no
+caller in the codebase used plain `transfer` through the generic `TokenClient` before this phase.
+Updated `mock-token::transfer` to honor the flag identically to `transfer_from`, so the refund
+rollback test can force a genuine trap the same way the charge rollback test does. Added direct
+mock-token test coverage for both the new `transfer` happy path and its failure-injection path (2
+new tests, 9 total in that crate now).
+
+29 new tests landed in a new `test_refund.rs` module (127 total in `mandate-registry` now, plus
+mock-token's own 9): full/partial refund success with balance assertions (payer restored,
+merchant debited, contract holds nothing); two partials summing to the exact payment amount both
+succeeding then a third of any positive amount rejected; single over-refund rejected; duplicate
+`refund_id` rejected both with a different amount against the *same* payment and against a
+*completely different* payment under the same mandate (proving the global, not per-payment,
+uniqueness scope); zero/negative amount rejected; unknown `payment_id` and unknown `mandate_id`
+rejected; a payment that belongs to a *different* mandate rejected with `PaymentNotFound`;
+wrong-signer rejections for both the payer and a random third party (`env.mock_auths`, never
+`mock_all_auths`); the four required state-independence tests (revoked/paused/expired/completed,
+each charges once then transitions state before refunding); the two required headroom tests
+(period-cap-then-refund-then-still-capped, and complete-via-max-charges-then-refund-then-still-
+completed-with-unchanged-counters); the rollback test (see below); refund of an older payment
+under a mandate with two charges, proving the newer payment's own `RefundedTotal` and receipt are
+untouched and mandate-level totals still reflect both original charges; full event-field
+assertion; and `get_refund`/`get_refunded_total` not-found/default-zero reads.
+
+**Authorization — two-level auth tree, verified via a real second `require_auth()` call, not
+assumed:** a refund's merchant authorization spans two points in the call graph — the top-level
+`refund` invocation itself, and the nested `TokenClient::transfer` call inside the token contract
+(`from.require_auth()` there, `from == merchant`). `refund_as` in `test_refund.rs` builds a
+two-level `MockAuthInvoke` tree (the `refund` call as root, the token `transfer` call as its
+`sub_invokes` entry) mirroring exactly what a real merchant wallet would sign for one transaction.
+This was necessary for the tests to compile/pass at all — an earlier attempt with only the
+top-level auth entry would have failed the nested `transfer`'s own `require_auth()` check, which
+is exactly the confirmation that both auth points are real and independently enforced.
+
+**`TokenClient::transfer` signature — verified against the vendored SDK source, per
+`tasks/lessons.md`'s existing guidance not to assume it:** `soroban-sdk-27.0.2/src/token.rs`
+defines `fn transfer(env: Env, from: Address, to: MuxedAddress, amount: i128)` — `to` is
+`MuxedAddress`, not `Address` (this project's own lessons file already flagged this exact gap
+before any caller existed). `refund.rs` calls `token.transfer(&payment.merchant,
+MuxedAddress::from(&payment.payer), &amount)`. Confirmed via the vendored
+`muxed_address.rs` source that `MuxedAddress::from(&Address)` wraps a non-multiplexed address as
+the identical underlying `AddressObject` value an `Address`-typed parameter expects — verified
+empirically too, since `mock-token`'s own `transfer` still declares `to: Address` (SDK-signature-
+simplified, documented as such since Phase 3) and every refund test passed against it unmodified.
+
+**Rollback test — result, not assumption:**
+`refund_transfer_failure_rolls_back_and_allows_retry_with_same_refund_id` forced
+`mock-token::set_fail_transfers(true)`, called `refund` wrapped in `std::panic::catch_unwind`,
+and asserted via direct storage reads that `RefundedTotal` was still `0`, no `RefundReceipt`
+existed (`get_refund` → `RefundNotFound`), and the `refund_id` was not marked used — then flipped
+the token back to working and retried the identical `refund_id`, which succeeded. This ran and
+passed; see the gate output below.
+
+**Deviation (flagged, not silent):** added error 24 (`RefundNotFound`) beyond the frozen 1–23
+block. The brief said "append at 24+ only if genuinely needed" — this was: `get_refund` needs a
+distinct not-found signal, and every existing code either means something else entirely
+(`DuplicateRefund`) or belongs to a different resource (`PaymentNotFound`, `MandateNotFound`).
+Also made a small non-contract fix to the test-only `mock-token` crate (`transfer` now honors
+`set_fail_transfers`) — required for the rollback test to be a genuine proof rather than a
+no-op; documented above and in `docs/contract-invariants.md`.
+
+**Commands run (all passed):**
+```
+cargo fmt --all
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace              (127 mandate-registry + 9 mock-token tests, all pass)
+cargo build --release --target wasm32v1-none
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+**Unverified / left for later phases:** the full CLAUDE.md §7 invariant→test mapping remains
+Phase 6's randomized property-test suite (`create → charge → pause → resume → charge → refund →
+revoke` sequences asserting all 22 PLAN.md §18 invariants hold after every op). No
+adversarial/malicious-token property testing of `refund` beyond the existing single-failure-
+injection mock.

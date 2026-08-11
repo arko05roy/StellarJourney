@@ -27,7 +27,7 @@
 
 use soroban_sdk::{contracttype, BytesN, Env, IntoVal, Val};
 
-use crate::types::{Mandate, PaymentReceipt};
+use crate::types::{Mandate, PaymentReceipt, RefundReceipt};
 
 /// Ledger close time on Stellar is targeted at ~5s, so ~17,280 ledgers is
 /// approximately one day. Used as the TTL *threshold*: once an entry's
@@ -52,6 +52,10 @@ pub enum DataKey {
     UsedRefund(BytesN<32>),
     /// Cumulative amount refunded against a given `payment_id`.
     RefundedTotal(BytesN<32>),
+    /// The stored `RefundReceipt` for a given `refund_id`, added in Phase 5
+    /// for parity with `Payment(payment_id)` — a `get_refund` read entrypoint
+    /// needs somewhere to read from.
+    Refund(BytesN<32>),
 }
 
 /// Bump a persistent key's TTL using the contract-wide threshold/extend-to
@@ -137,5 +141,19 @@ pub fn get_refunded_total(env: &Env, payment_id: &BytesN<32>) -> i128 {
 pub fn set_refunded_total(env: &Env, payment_id: &BytesN<32>, total: i128) {
     let key = DataKey::RefundedTotal(payment_id.clone());
     env.storage().persistent().set(&key, &total);
+    bump_persistent(env, &key);
+}
+
+// --- Refund receipts (Phase 5) ---
+
+pub fn get_refund(env: &Env, refund_id: &BytesN<32>) -> Option<RefundReceipt> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Refund(refund_id.clone()))
+}
+
+pub fn set_refund(env: &Env, receipt: &RefundReceipt) {
+    let key = DataKey::Refund(receipt.refund_id.clone());
+    env.storage().persistent().set(&key, receipt);
     bump_persistent(env, &key);
 }

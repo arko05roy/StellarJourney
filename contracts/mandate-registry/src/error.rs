@@ -31,6 +31,10 @@ pub enum Error {
     DuplicateCharge = 13,
     UnauthorizedMerchant = 14,
     InsufficientAllowance = 15,
+    /// Payer's token balance is too low (`charge`), or, since Phase 5,
+    /// merchant's token balance is too low for a `refund` — same code, same
+    /// advisory-pre-flight-before-the-real-transfer-call role in both
+    /// callers.
     InsufficientBalance = 16,
     PaymentNotFound = 17,
     RefundExceedsPayment = 18,
@@ -56,4 +60,12 @@ pub enum Error {
     /// resume source and isn't itself a rejection reason like Paused/Revoked/
     /// Completed/Expired).
     InvalidStateTransition = 23,
+    /// `get_refund` found no stored `RefundReceipt` for the given
+    /// `refund_id`. Added in Phase 5, genuinely new: no existing code fits —
+    /// `DuplicateRefund` means the opposite thing (a refund_id already used
+    /// by a *successful* refund), so reusing it here would misreport "not
+    /// found" as "already refunded", exactly the generic-error mislabeling
+    /// CLAUDE.md §8 forbids. Parity with `PaymentNotFound` (17) for
+    /// `get_payment`.
+    RefundNotFound = 24,
 }

@@ -3,19 +3,20 @@
 //! This contract is the protocol's policy authority — the backend database
 //! and relayer are never trusted over its on-chain state.
 //!
-//! Phase 4 scope (this file's current state): the payer-only mandate
+//! Phase 5 scope (this file's current state): the payer-only mandate
 //! lifecycle (`create_mandate`, `pause_mandate`, `resume_mandate`,
-//! `revoke_mandate`, `get_mandate`) plus charge execution (`charge`,
+//! `revoke_mandate`, `get_mandate`), charge execution (`charge`,
 //! `get_payment`) — fixed and variable amount rules, billing-period
-//! rollover, and the `Completed` transition. `refund` lands in Phase 5 (see
-//! tasks/todo.md). Lifecycle business logic lives in `lifecycle.rs`, charge
-//! logic in `charge.rs`; this file only declares the thin `#[contractimpl]`
-//! entrypoints that adapt them to the Soroban ABI.
+//! rollover, and the `Completed` transition — and refunds (`refund`,
+//! `get_refund`, `get_refunded_total`). Lifecycle business logic lives in
+//! `lifecycle.rs`, charge logic in `charge.rs`, refund logic in `refund.rs`;
+//! this file only declares the thin `#[contractimpl]` entrypoints that adapt
+//! them to the Soroban ABI.
 #![no_std]
 
 // Tests run on std (via soroban-sdk's `testutils`, e.g. `Address::generate`,
-// `env.auths()`); only the `test`/`test_lifecycle`/`test_charge` modules
-// pull it in.
+// `env.auths()`); only the `test`/`test_lifecycle`/`test_charge`/
+// `test_period`/`test_refund` modules pull it in.
 #[cfg(test)]
 extern crate std;
 
@@ -25,6 +26,7 @@ pub mod events;
 pub mod id;
 pub mod lifecycle;
 pub mod math;
+pub mod refund;
 pub mod storage;
 pub mod types;
 
@@ -36,11 +38,13 @@ mod test_charge;
 mod test_lifecycle;
 #[cfg(test)]
 mod test_period;
+#[cfg(test)]
+mod test_refund;
 
 use soroban_sdk::{contract, contractimpl, BytesN, Env};
 
 use error::Error;
-use types::{Mandate, MandateInput, PaymentReceipt};
+use types::{Mandate, MandateInput, PaymentReceipt, RefundReceipt};
 
 #[contract]
 pub struct MandateRegistry;
@@ -96,5 +100,32 @@ impl MandateRegistry {
     /// Read-only. `PaymentNotFound` if no receipt exists for `payment_id`.
     pub fn get_payment(env: Env, payment_id: BytesN<32>) -> Result<PaymentReceipt, Error> {
         charge::get_payment(&env, &payment_id)
+    }
+
+    /// Execute one refund against `payment_id` (must belong to
+    /// `mandate_id`). Requires `mandate.merchant.require_auth()` — the
+    /// merchant gives up the funds. Permitted regardless of the mandate's
+    /// current status (revoked/paused/expired/completed all allowed); see
+    /// `refund.rs` for the full validation order and the no-headroom-
+    /// restoration rule.
+    pub fn refund(
+        env: Env,
+        mandate_id: BytesN<32>,
+        payment_id: BytesN<32>,
+        amount: i128,
+        refund_id: BytesN<32>,
+    ) -> Result<RefundReceipt, Error> {
+        refund::refund(&env, &mandate_id, &payment_id, amount, &refund_id)
+    }
+
+    /// Read-only. `RefundNotFound` if no receipt exists for `refund_id`.
+    pub fn get_refund(env: Env, refund_id: BytesN<32>) -> Result<RefundReceipt, Error> {
+        refund::get_refund(&env, &refund_id)
+    }
+
+    /// Read-only. Cumulative amount refunded against `payment_id` so far
+    /// (`0` if none). Convenience for backend/dashboard consumers.
+    pub fn get_refunded_total(env: Env, payment_id: BytesN<32>) -> i128 {
+        refund::get_refunded_total(&env, &payment_id)
     }
 }

@@ -476,3 +476,156 @@ has elapsed still correctly fails with `ChargeTooSoon`, not a period-reset succe
 `test_period::min_interval_still_enforced_across_a_period_rollover` proves both halves: the
 too-early attempt (past the period boundary, short of the interval) rejects with `ChargeTooSoon`,
 and the same amount at the interval boundary succeeds with the freshly rolled-over allowance.
+
+---
+
+## Phase 5 — Refunds
+
+Scope: `refund`, `get_refund`, `get_refunded_total` (`contracts/mandate-registry/src/refund.rs`).
+One new error code was needed — `RefundNotFound` (24) — for `get_refund`'s not-found case; no
+existing code fits without being actively misleading (see below).
+
+### New error code (24)
+
+| Code | Name           | Meaning                                                                 |
+|------|----------------|--------------------------------------------------------------------------|
+| 24   | RefundNotFound | `get_refund` found no stored `RefundReceipt` for the given `refund_id`. Genuinely new: `DuplicateRefund` (19) means the *opposite* — a `refund_id` already consumed by a successful refund — so reusing it for "not found" would misreport one deterministic failure as another, which CLAUDE.md §8 forbids. Parity with `PaymentNotFound` (17) for `get_payment`. |
+
+Error 16 (`InsufficientBalance`)'s doc comment was broadened, not renumbered: it now covers both
+the payer's balance (`charge`) and, since this phase, the merchant's balance (`refund`) — same
+advisory-pre-flight role in both callers, same code, no new variant needed.
+
+### Validation order as implemented
+
+| Step | Check | Error on violation |
+|------|-------|---------------------|
+| 1 | Mandate exists | `MandateNotFound` |
+| 2 | Payment exists | `PaymentNotFound` |
+| 3 | Payment belongs to `mandate_id` | `PaymentNotFound` (not a distinct "mismatched mandate" error — see rationale below) |
+| 4 | `mandate.merchant.require_auth()` | host trap if unauthorized |
+| 5 | `refund_id` unused (**global** scope — see below) | `DuplicateRefund` |
+| 6 | `amount > 0` | `InvalidAmount` |
+| 7 | `refunded_total[payment_id] + amount <= payment.amount` (checked add) | `RefundExceedsPayment` |
+| 8 | Merchant token balance sufficient — advisory pre-flight only | `InsufficientBalance` |
+| — | `TokenClient::transfer(from = merchant, to = payer, amount)` | traps the whole invocation on failure (see Rollback below) |
+| — | `RefundedTotal` update, `UsedRefund` mark, `RefundReceipt` store, `refund_succeeded` event | — |
+
+**No mandate-status check anywhere in this order** — this is the central Phase 5 decision, not an
+oversight. See "Refunds are permitted in every mandate state" below.
+
+Step 3 deliberately reuses `PaymentNotFound` rather than introducing a new "wrong mandate" error:
+from the caller's point of view, passing a `payment_id` that exists but isn't this mandate's is
+observationally identical to passing one that doesn't exist under this mandate at all — the
+caller supplied a `(mandate_id, payment_id)` pair with no valid payment, full stop.
+
+### The `transfer` (not `transfer_from`) model — merchant authorizes directly
+
+Refund moves money **merchant -> payer**, the reverse direction of a charge. `refund.rs` calls
+`TokenClient::transfer(&payment.merchant, MuxedAddress::from(&payment.payer), &amount)` —
+`transfer`, not `transfer_from`. There is no allowance on either side: `transfer`'s real SEP-41
+signature is `fn transfer(env, from: Address, to: MuxedAddress, amount: i128)`
+(`soroban-sdk-27.0.2/src/token.rs`), and it authorizes via `from.require_auth()` inside the token
+contract — i.e. the merchant, as `from`, must authorize this token-level call directly, exactly
+like a person paying someone back out of their own wallet. `MuxedAddress::from(&Address)` wraps a
+plain (non-multiplexed) address as the same underlying `AddressObject` value the token contract's
+`to: Address` parameter expects, so passing a never-multiplexed payer address through this
+conversion decodes identically to passing an `Address` directly — verified in this contract's own
+test suite (`test_refund.rs` exercises it against `mock-token`'s literal `to: Address` parameter),
+not merely assumed from the SDK's documented forward-compatibility guarantee ("this type is
+compatible with `Address` at the contract interface level").
+
+**Two separate `require_auth()` calls, one signed tree.** The merchant authorizes *two* distinct
+points in the call graph for one `refund` invocation: the top-level `refund` call itself
+(`mandate.merchant.require_auth()`, step 4 above) and the nested token `transfer` call
+(`from.require_auth()` inside the token contract). Both resolve from a single signed authorization
+tree — the root entry for `(mandate_registry, "refund", args)` carries the nested `transfer` call
+as a `sub_invocation`, exactly mirroring what a real merchant wallet would present as one signature
+request. `test_refund.rs`'s `refund_as` helper builds this exact two-level `MockAuthInvoke` tree.
+
+The payer, merchant, and asset used for both the transfer call and the stored `RefundReceipt` are
+read **from the `PaymentReceipt`**, never from the mandate record or from call arguments — the
+receipt is the immutable record of what actually moved on the original charge, so a refund can
+only ever undo exactly that, structurally, not just by policy.
+
+### No-headroom-restoration rule (the point of this phase)
+
+A refund does **not** decrement `mandate.total_collected`, `mandate.current_period_collected`, or
+`mandate.successful_charges`, and does not un-complete a `Completed` mandate. `refund.rs` never
+writes the `Mandate` record at all — it only reads `mandate.merchant` for the authorization check.
+
+**Rationale (anti-bypass):** if a refund restored spending headroom, a merchant could
+charge -> refund -> charge in a loop and collect (and keep) unbounded real economic value while
+every individual balance check still reports compliance with `max_per_period` /
+`max_successful_charges`. Those caps are meant to bound *gross* collection over a mandate's
+lifetime — every dollar the mandate contract was ever authorized to move — not *net-of-refunds*
+collection. A refund is a separate, merchant-initiated act (goodwill, dispute resolution, a
+billing correction) that sits on top of the original charge's already-consumed headroom; it does
+not entitle the merchant to collect that headroom a second time.
+
+Proven by two tests, both required and both landed:
+`test_refund::refund_does_not_restore_period_headroom` (charge to the period cap, fully refund it,
+then prove a same-period same-fixed-amount charge still fails with `AmountExceedsPeriodLimit`) and
+`test_refund::refund_does_not_uncomplete_mandate_or_decrement_successful_charges` (complete a
+mandate via `max_successful_charges`, refund its only payment, assert `status` is still
+`Completed` and `successful_charges`/`total_collected` are unchanged).
+
+### Global `refund_id` uniqueness scope
+
+`storage::has_used_refund`/`mark_refund_used` operate on the bare `UsedRefund(refund_id)` key
+inherited from Phase 1 — there is no `(payment_id, refund_id)` or `(mandate_id, refund_id)`
+composite key. A `refund_id` is therefore unique across the **entire contract**, not scoped to one
+payment or one mandate: the same `refund_id` can never succeed twice, even against two completely
+different payments under two completely different mandates. This mirrors how an API
+`Idempotency-Key` is treated — a single global namespace the caller (typically the merchant
+backend) is responsible for generating collision-resistant values within — deliberately different
+from `charge_id`, which is scoped per-mandate by an already-composite `(mandate_id, charge_id)`
+key. `test_refund::refund_duplicate_refund_id_rejected_across_different_payments` proves the global
+scope explicitly: the same `refund_id`, reused against a different payment under the same mandate,
+is still rejected with `DuplicateRefund`.
+
+### Refunds are permitted in every mandate state
+
+`refund` performs **zero** mandate-status checks — no `Active`/`Paused`/`Revoked`/`Completed`/
+computed-`Expired` branch anywhere in its validation order. This is deliberate: refusing to refund
+a cancelled, expired, paused, or completed subscription would be user-hostile (a merchant should
+always be able to make a customer whole) and is not itself a security property — unlike a charge,
+a refund can only ever move money **out of** the merchant's own control and **into** the payer's,
+strictly bounded by the original payment amount (step 7). There is no way for a refund to be used
+to extract more value than the mandate ever authorized moving in the first place.
+
+Proven by four required state-independence tests, one per non-`Active` status:
+`refund_succeeds_on_revoked_mandate`, `refund_succeeds_on_paused_mandate`,
+`refund_succeeds_on_expired_mandate` (advances past `expires_at` and confirms `get_mandate` reports
+computed-`Expired` before refunding), and `refund_succeeds_on_completed_mandate`.
+
+### Accounting-mutates-only-after-transfer, and the rollback guarantee
+
+`RefundedTotal(payment_id)`, the `UsedRefund` replay guard, and the `RefundReceipt` are all written
+strictly *after* `TokenClient::transfer` returns successfully — identical discipline to
+`charge.rs`. If `transfer` traps, the entire `refund` invocation traps with it and the Soroban host
+discards every storage write attempted so far.
+
+This was **verified with a real failing token, not assumed** — and required a small fix to
+`mock-token` first: `mock-token`'s `transfer` function did not originally consult the
+`set_fail_transfers` flag at all (only `transfer_from` did, since Phase 3 never exercised plain
+`transfer` through the generic `TokenClient`). `mock-token::transfer` was updated to honor the flag
+identically to `transfer_from`, so the refund rollback test can force a genuine trap the same way
+the charge rollback test does — this is a test-fixture fix, not a contract behavior change, and
+`mock-token`'s own test module gained direct coverage of both the new `transfer` happy path and its
+failure-injection path.
+
+`test_refund::refund_transfer_failure_rolls_back_and_allows_retry_with_same_refund_id` forces
+`mock-token`'s `set_fail_transfers(true)`, catches the resulting panic with
+`std::panic::catch_unwind`, and asserts via direct storage reads that `RefundedTotal` is still `0`,
+no `RefundReceipt` exists (`get_refund` returns `RefundNotFound`), and the `refund_id` is **not**
+marked used. It then flips the token back to working and retries the identical `refund_id`, which
+succeeds — proving the replay guard was never consumed by the failed attempt, exactly mirroring the
+Phase 3 charge rollback proof.
+
+### `RefundedTotal` is per-payment, mandate accounting is untouched by refunds elsewhere
+
+`test_refund::refund_of_older_payment_does_not_disturb_newer_charge_accounting` charges twice under
+one mandate, refunds only the older payment in full, and confirms the newer payment's own
+`RefundedTotal` is still `0`, its receipt is unchanged, and `mandate.total_collected`/
+`successful_charges` (which never decrement on any refund, per the no-headroom-restoration rule
+above) still reflect both original charges.
