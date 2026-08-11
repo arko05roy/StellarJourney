@@ -20,10 +20,8 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: node scripts/start-render-free.mjs
-    preDeployCommand: pnpm prisma:migrate:deploy
     autoDeployTrigger: checksPass
     healthCheckPath: /readyz
-    maxShutdownDelaySeconds: 120
     envVars:
       - fromGroup: paymap-demo-secrets
       - key: DATABASE_URL

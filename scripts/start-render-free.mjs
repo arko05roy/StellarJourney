@@ -3,6 +3,22 @@ import console from "node:console";
 import process from "node:process";
 
 const publicPort = process.env.PORT ?? "10000";
+
+await new Promise((resolve, reject) => {
+  const migration = spawn("pnpm", ["prisma:migrate:deploy"], {
+    env: process.env,
+    stdio: "inherit",
+  });
+  migration.once("error", reject);
+  migration.once("exit", (code, signal) => {
+    if (code === 0) {
+      resolve();
+      return;
+    }
+    reject(new Error(`database migration failed (${code ?? signal ?? "unknown"})`));
+  });
+});
+
 const children = [
   spawn(process.execPath, ["apps/api/dist/index.js"], {
     env: { ...process.env, PORT: publicPort },
