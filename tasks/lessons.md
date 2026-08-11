@@ -670,3 +670,7 @@ JSON.stringify(body) } : {})`) rather than passing `undefined` as a value.
   that new module's own imports (even indirectly, through another
   workspace package's root) touch a Node builtin, and if so, add/consume a
   subpath export instead of touching the barrel.
+- Submission transaction evidence should default to CSV when reviewers need
+  spreadsheet analysis. Keep one transaction per row with phase, hash, source
+  address, verification status, and an explorer link; do not make JSON the
+  only public artifact.

@@ -2376,7 +2376,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 - `scripts/stress-test-testnet.ts`
 - `scripts/package.json`
-- `docs/level-5/evidence/testnet-stress-*.json`
+- `docs/level-5/evidence/testnet-stress-*.csv`
 - `tasks/todo.md`
 
 ### Questions
@@ -2389,7 +2389,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 - Added a reusable opt-in testnet stress runner with isolated temporary CLI identities, bounded
   allowances, wallet-authenticated merchant sessions, production API charge authorization, live
-  relayer execution, Horizon verification, and secret-free JSON evidence.
+  relayer execution, Horizon verification, and secret-free CSV evidence.
 - Submitted and verified 52 intended testnet transactions across 7 payer and 5 merchant accounts:
   12 Friendbot fundings, 12 trustlines, 7 asset fundings, 7 allowances, 7 mandates, and 7 charges.
 
@@ -2410,3 +2410,51 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 #### Follow-ups
 
 - Use the evidence report for technical stress proof only; collect 50 real users separately.
+
+---
+
+## Phase 21 - CSV Transaction Evidence
+
+### Plan
+
+- [x] Replace the JSON stress artifact with a one-row-per-transaction CSV.
+- [x] Make future testnet stress runs emit CSV directly.
+- [x] Update README and task documentation to reference the CSV artifact.
+
+### Verification
+
+- [x] CSV contains 52 data rows and 52 unique valid transaction hashes
+- [x] Every row includes phase, source address, and Stellar Expert link
+- [x] Script lint and typecheck
+- [x] JSON artifact removed
+- [x] `git diff --check`
+
+### Files likely touched
+
+- `scripts/stress-test-testnet.ts`
+- `docs/level-5/evidence/testnet-stress-20260730045306-585217.csv`
+- `README.md`
+- `tasks/todo.md`
+
+### Review
+
+#### Changed
+
+- Replaced the stress-run JSON with a spreadsheet-ready CSV containing one transaction per row.
+- Updated the stress runner and README to emit and link CSV evidence by default.
+
+#### Verified
+
+- CSV has 52 data rows, 52 unique 64-character hashes, and eight fields per row.
+- Phase totals remain 12 fundings, 12 trustlines, 7 asset fundings, 7 allowances, 7 mandates, and
+  7 relayed charges.
+- Every row is marked successful and includes its source address and direct Stellar Expert URL.
+- Script lint/typecheck, secret scan, JSON-removal check, and `git diff --check` pass.
+
+#### Risks
+
+- The CSV intentionally contains only public testnet metadata.
+
+#### Follow-ups
+
+- None.

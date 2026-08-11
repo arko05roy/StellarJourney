@@ -59,23 +59,6 @@ interface MerchantContext {
   productId: string;
 }
 
-interface FlowEvidence {
-  index: number;
-  payerAddress: string;
-  merchantAddress: string;
-  assetFundingTransactionHash: string;
-  allowanceTransactionHash: string;
-  mandateTransactionHash: string;
-  mandateId: string;
-  checkoutSessionId: string;
-  chargeRequestId: string;
-  chargeTransactionHash: string;
-  chargeStatus: string;
-  successfulCharges: number;
-  totalCollectedBaseUnits: string;
-  elapsedMs: number;
-}
-
 interface TransactionEvidence {
   hash: string;
   phase: string;
@@ -107,6 +90,38 @@ function normalizeHash(value: string): string {
     throw new Error(`invalid transaction hash returned: ${value}`);
   }
   return normalized;
+}
+
+function csvCell(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+function transactionEvidenceCsv(
+  runId: string,
+  startedAt: string,
+  transactions: readonly TransactionEvidence[],
+): string {
+  const header = [
+    "run_id",
+    "run_started_at",
+    "network",
+    "phase",
+    "transaction_hash",
+    "source_address",
+    "verification_status",
+    "stellar_expert_url",
+  ];
+  const rows = transactions.map((transaction) => [
+    runId,
+    startedAt,
+    NETWORK,
+    transaction.phase,
+    transaction.hash,
+    transaction.sourceAddress,
+    "successful",
+    `https://stellar.expert/explorer/${NETWORK}/tx/${transaction.hash}`,
+  ]);
+  return `${[header, ...rows].map((row) => row.map(csvCell).join(",")).join("\n")}\n`;
 }
 
 function safeApiUrl(): string {
@@ -571,7 +586,6 @@ async function main(): Promise<void> {
   const runId = `stress-${startedAt.toISOString().replace(/[-:.TZ]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`;
   const configDir = mkdtempSync(join(tmpdir(), "paymap-stress-"));
   const transactions: TransactionEvidence[] = [];
-  const flows: FlowEvidence[] = [];
 
   try {
     log(`run ${runId}; expected transactions=${String(EXPECTED_TRANSACTION_COUNT)}`);
@@ -605,19 +619,13 @@ async function main(): Promise<void> {
     const issuerAddress = deployment.asset.issuer;
     const pendingCharges: Array<{
       index: number;
-      startedMs: number;
       payer: PrivateAccount;
       merchant: MerchantContext;
-      assetFundingTransactionHash: string;
-      allowanceTransactionHash: string;
-      mandateTransactionHash: string;
       mandateId: string;
-      checkoutSessionId: string;
       chargeRequestId: string;
     }> = [];
 
     for (let index = 0; index < payers.length; index += 1) {
-      const startedMs = Date.now();
       const payer = payers[index];
       const merchant = merchants[index % merchants.length];
       if (!payer || !merchant) throw new Error(`missing flow account at index ${String(index)}`);
@@ -682,14 +690,9 @@ async function main(): Promise<void> {
       );
       pendingCharges.push({
         index,
-        startedMs,
         payer,
         merchant,
-        assetFundingTransactionHash,
-        allowanceTransactionHash,
-        mandateTransactionHash: mandate.transactionHash,
         mandateId: mandate.mandateId,
-        checkoutSessionId,
         chargeRequestId,
       });
       log(`flow ${String(index + 1)}/${String(PAYER_COUNT)} queued: mandate ${mandate.mandateId}`);
@@ -717,22 +720,6 @@ async function main(): Promise<void> {
       if (mandate.successfulCharges !== 1 || mandate.totalCollected !== 1_000_000n) {
         throw new Error(`mandate ${pending.mandateId} has unexpected post-charge accounting`);
       }
-      flows.push({
-        index: pending.index + 1,
-        payerAddress: pending.payer.address,
-        merchantAddress: pending.merchant.account.address,
-        assetFundingTransactionHash: pending.assetFundingTransactionHash,
-        allowanceTransactionHash: pending.allowanceTransactionHash,
-        mandateTransactionHash: pending.mandateTransactionHash,
-        mandateId: pending.mandateId,
-        checkoutSessionId: pending.checkoutSessionId,
-        chargeRequestId: pending.chargeRequestId,
-        chargeTransactionHash: charge.transactionHash,
-        chargeStatus: charge.status,
-        successfulCharges: mandate.successfulCharges,
-        totalCollectedBaseUnits: mandate.totalCollected.toString(),
-        elapsedMs: Date.now() - pending.startedMs,
-      });
       log(`flow ${String(pending.index + 1)} succeeded: ${charge.transactionHash}`);
     }
 
@@ -750,46 +737,6 @@ async function main(): Promise<void> {
       await verifyHorizonTransaction(transactionHash);
     }
 
-    const finishedAt = new Date();
-    const publicAccounts: PublicAccount[] = [...payers, ...merchantAccounts].map(
-      ({ role, index, address, fundingTransactionHash, trustlineTransactionHash }) => ({
-        role,
-        index: index + 1,
-        address,
-        fundingTransactionHash,
-        trustlineTransactionHash,
-      }),
-    );
-    const phaseCounts = Object.fromEntries(
-      [...new Set(transactions.map((transaction) => transaction.phase))].map((phase) => [
-        phase,
-        transactions.filter((transaction) => transaction.phase === phase).length,
-      ]),
-    );
-    const report = {
-      runId,
-      purpose: "Controlled product stress test; not evidence of genuine user onboarding.",
-      network: NETWORK,
-      networkPassphrase: deployment.networkPassphrase,
-      apiUrl,
-      rpcUrl: deployment.rpcUrl,
-      horizonUrl: HORIZON_URL,
-      contractId: deployment.contractId,
-      asset: deployment.asset,
-      startedAt: startedAt.toISOString(),
-      finishedAt: finishedAt.toISOString(),
-      elapsedMs: finishedAt.getTime() - startedAt.getTime(),
-      expectedTransactionCount: EXPECTED_TRANSACTION_COUNT,
-      successfulTransactionCount: transactions.length,
-      uniqueTransactionCount: uniqueHashes.size,
-      failedTransactionCount: 0,
-      successRate: 1,
-      distinctAddressCount: publicAccounts.length,
-      phaseCounts,
-      accounts: publicAccounts,
-      flows,
-      transactions,
-    };
     const evidenceDir = join(
       process.env["INIT_CWD"] ?? process.cwd(),
       "docs",
@@ -797,12 +744,14 @@ async function main(): Promise<void> {
       "evidence",
     );
     mkdirSync(evidenceDir, { recursive: true });
-    const reportPath = join(evidenceDir, `testnet-${runId}.json`);
-    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, {
+    const reportPath = join(evidenceDir, `testnet-${runId}.csv`);
+    writeFileSync(reportPath, transactionEvidenceCsv(runId, startedAt.toISOString(), transactions), {
       encoding: "utf8",
       mode: 0o644,
     });
-    log(`complete: ${String(transactions.length)} transactions, ${String(publicAccounts.length)} addresses`);
+    log(
+      `complete: ${String(transactions.length)} transactions, ${String(payers.length + merchantAccounts.length)} addresses`,
+    );
     log(`evidence: ${reportPath}`);
   } finally {
     rmSync(configDir, { recursive: true, force: true });
