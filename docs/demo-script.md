@@ -33,23 +33,21 @@ printing any private key. See the root `README.md` for prerequisites and deploym
 
 ### Via the dashboard (Phase 12b, preferred for the live demo)
 
-1. Open `/merchant/connect` (`apps/web`). Fill in **"New to Paymap"** with a business name and the
-   merchant's Stellar wallet address, submit — the API key is shown exactly once; copy it (CLAUDE.md
-   §10 — it cannot be shown again, though the session itself stays connected via an httpOnly cookie).
+1. Open `/merchant/connect` (`apps/web`). Connect Freighter and sign the five-minute authentication
+   challenge. No transaction is submitted. For a new wallet, enter the business name after
+   ownership is verified.
 2. **Products -> New product.** Fill in the pitch example: variable up to `$20`, `2592000`-second
    (30-day) period, `20.00` max per period, `0` minimum interval, unlimited charge count, `31536000`
    second (12-month) mandate lifetime. Submit — every term here becomes part of the mandate the payer
    authorizes, nothing adjustable later.
 3. **Checkout links.** Select the new product, click **Generate checkout link**, then **Copy link**.
 
-### Via curl (equivalent, scriptable)
+### Via API key (after wallet sign-in)
+
+Create a scoped key under **Developers** with product and checkout-session write permissions. The
+raw key is shown once, then can drive the scriptable steps:
 
 ```bash
-curl -s -X POST http://localhost:3001/v1/merchants \
-  -H 'content-type: application/json' \
-  -d '{"name": "CloudBox", "walletAddress": "<merchant G... address>"}'
-# -> { "merchantId": "...", "apiKey": "sk_...", ... } — apiKey is shown once, save it.
-
 curl -s -X POST http://localhost:3001/v1/products \
   -H "authorization: Bearer <apiKey>" -H 'content-type: application/json' \
   -d '{

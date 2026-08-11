@@ -52,6 +52,8 @@ services:
         value: CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22
       - key: API_KEY_HASH_SECRET
         generateValue: true
+      - key: MERCHANT_AUTH_DOMAIN
+        value: paymap-web.vercel.app
 
   - type: pserv
     name: paymap-relayer-staging

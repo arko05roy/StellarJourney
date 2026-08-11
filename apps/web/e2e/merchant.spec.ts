@@ -1,29 +1,23 @@
 import { expect, test } from "@playwright/test";
 
 /**
- * Merchant dashboard happy path (Phase 12b): create a merchant account,
+ * Merchant dashboard happy path: authenticate a merchant wallet,
  * create a product, generate a checkout link, view the resulting mandate,
- * view a failed collection with its human-readable reason, then rotate the
- * API key. Every merchant-authenticated call happens server-side against
- * `e2e/fixtures/mock-api-server.mjs`'s merchant routes — this test never
- * sees the API key value itself (it only reads what the UI intentionally
- * displays once, in the same "shown once" spirit as a real deployment).
+ * view a failed collection with its human-readable reason, then create a
+ * scoped integration key.
  */
 const VALID_ASSET_ADDRESS = "CAEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQSCIJBEEQTD2L";
 
 test.describe("merchant dashboard — happy path", () => {
-  test("create account, create product, generate checkout link, view mandate and failed collection, rotate API key", async ({ page }) => {
+  test("wallet auth, product, checkout link, mandate, failed collection, scoped API key", async ({
+    page,
+  }) => {
     await page.goto("/merchant/connect");
 
-    await page.getByTestId("create-merchant-name-input").fill("Acme Coffee Roasters");
-    await page.getByTestId("create-merchant-wallet-input").fill("GMERCHANTWALLETADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
-    await page.getByTestId("create-merchant-submit-button").click();
-
-    await expect(page.getByTestId("new-api-key-banner")).toBeVisible({ timeout: 10_000 });
-    const issuedKey = await page.getByTestId("new-api-key-value").innerText();
-    expect(issuedKey.startsWith("pmk_e2e_")).toBe(true);
-
-    await page.getByTestId("continue-to-dashboard-link").click();
+    await page.getByTestId("merchant-wallet-connect-button").click();
+    await expect(page.getByTestId("merchant-profile-step")).toBeVisible({ timeout: 10_000 });
+    await page.getByTestId("merchant-profile-name-input").fill("Acme Coffee Roasters");
+    await page.getByTestId("merchant-profile-submit-button").click();
     await expect(page).toHaveURL(/\/merchant\/products$/);
 
     // --- Create a product ---
@@ -57,41 +51,49 @@ test.describe("merchant dashboard — happy path", () => {
     // --- View a failed collection with its reason ---
     await page.getByTestId("merchant-nav-failed").click();
     await expect(page.getByTestId("failed-collections-list")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByTestId("failed-collections-list")).toContainText(/exceeding your maximum charge/i);
-    await expect(page.getByTestId("failed-collections-list")).toContainText("AmountExceedsChargeLimit");
+    await expect(page.getByTestId("failed-collections-list")).toContainText(
+      /exceeding your maximum charge/i,
+    );
+    await expect(page.getByTestId("failed-collections-list")).toContainText(
+      "AmountExceedsChargeLimit",
+    );
 
-    // --- Rotate the API key ---
+    // --- Create a scoped integration key ---
     await page.getByTestId("merchant-nav-developers").click();
-    await page.getByTestId("rotate-api-key-button").click();
+    await page.getByTestId("api-key-name-input").fill("Checkout backend");
+    await page.locator('input[name="scopes"][value="checkout_sessions:write"]').check();
+    await page.getByTestId("create-api-key-button").click();
 
-    await expect(page.getByTestId("rotated-api-key-banner")).toBeVisible({ timeout: 10_000 });
-    const rotatedKey = await page.getByTestId("rotated-api-key-value").innerText();
-    expect(rotatedKey.startsWith("pmk_e2e_")).toBe(true);
-    expect(rotatedKey).not.toBe(issuedKey);
+    await expect(page.getByTestId("new-scoped-api-key-banner")).toBeVisible({ timeout: 10_000 });
+    const integrationKey = await page.getByTestId("new-scoped-api-key-value").innerText();
+    expect(integrationKey.startsWith("sk_live_e2e_")).toBe(true);
   });
 });
 
 test.describe("merchant dashboard — accessibility", () => {
-  test("the connect form and nav are operable with keyboard only, with focus always visible", async ({ page }) => {
+  test("the connect form and nav are operable with keyboard only, with focus always visible", async ({
+    page,
+  }) => {
     await page.goto("/merchant/connect");
 
-    const nameInput = page.getByTestId("create-merchant-name-input");
-    await nameInput.focus();
-    await expect(nameInput).toBeFocused();
-    const outlineOrRing = await nameInput.evaluate((el) => {
+    const connectButton = page.getByTestId("merchant-wallet-connect-button");
+    await connectButton.focus();
+    await expect(connectButton).toBeFocused();
+    const outlineOrRing = await connectButton.evaluate((el) => {
       const style = getComputedStyle(el);
       return style.outlineWidth !== "0px" || style.boxShadow !== "none";
     });
     expect(outlineOrRing).toBe(true);
 
+    await page.keyboard.press("Enter");
+    const nameInput = page.getByTestId("merchant-profile-name-input");
+    await expect(nameInput).toBeVisible({ timeout: 10_000 });
     await nameInput.fill("Acme Coffee Roasters");
-    await page.getByTestId("create-merchant-wallet-input").fill("GMERCHANTWALLETADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX");
-    const submitButton = page.getByTestId("create-merchant-submit-button");
+    const submitButton = page.getByTestId("merchant-profile-submit-button");
     await submitButton.focus();
     await page.keyboard.press("Enter");
 
-    await expect(page.getByTestId("new-api-key-banner")).toBeVisible({ timeout: 10_000 });
-    await page.getByTestId("continue-to-dashboard-link").click();
+    await expect(page).toHaveURL(/\/merchant\/products$/, { timeout: 10_000 });
 
     const mandatesLink = page.getByTestId("merchant-nav-mandates");
     await mandatesLink.focus();

@@ -1,5 +1,12 @@
 # Lessons
 
+## Merchant authentication
+
+- Mistake: used a merchant API key as the human dashboard login and accepted a typed payout
+  address without wallet-ownership proof.
+- Rule: authenticate merchants by a signed wallet challenge first; issue scoped API keys only
+  afterward for server-to-server integrations, never as the primary dashboard session.
+
 ## Production homepage
 
 - Mistake: deployment verification checked HTTP availability but did not inspect the visible root

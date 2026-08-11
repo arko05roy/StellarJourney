@@ -1,7 +1,8 @@
 /**
  * Security test for this phase's hard requirement (CLAUDE.md's lead
- * decision #1): the merchant API key must never reach client-side
- * JavaScript.
+ * decision #1): merchant sessions and integration credentials must never
+ * reach client-side JavaScript except an explicitly one-time-displayed new
+ * integration key.
  *
  * Two independent proofs, not one:
  *
@@ -20,7 +21,7 @@
  *    `src/components/merchant/**` and `src/app/merchant/**` is scanned for
  *    any import of the two server-only modules by name/path. A Client
  *    Component that ever imports them directly is a real leak vector
- *    (its module graph, including whatever it does with the key, ships to
+ *    (its module graph, including whatever it does with the credential, ships to
  *    the browser) independent of whether `server-only` would also catch it
  *    at build time — this test fails fast, in this package's own `pnpm
  *    test`, without needing a full `next build` to discover the mistake.
@@ -40,7 +41,11 @@ function walk(dir: string): string[] {
     const stat = statSync(full);
     if (stat.isDirectory()) {
       files.push(...walk(full));
-    } else if (/\.(ts|tsx)$/.test(entry) && !entry.endsWith(".test.ts") && !entry.endsWith(".test.tsx")) {
+    } else if (
+      /\.(ts|tsx)$/.test(entry) &&
+      !entry.endsWith(".test.ts") &&
+      !entry.endsWith(".test.tsx")
+    ) {
       files.push(full);
     }
   }
@@ -48,10 +53,13 @@ function walk(dir: string): string[] {
 }
 
 describe("merchant-session.ts / merchant-api.ts declare `server-only`", () => {
-  it.each(["merchant-session.ts", "merchant-api.ts"])("%s starts with `import \"server-only\";`", (filename) => {
-    const source = readFileSync(join(SRC_ROOT, "lib", filename), "utf8");
-    expect(source).toMatch(/^\s*import "server-only";/m);
-  });
+  it.each(["merchant-session.ts", "merchant-api.ts"])(
+    '%s starts with `import "server-only";`',
+    (filename) => {
+      const source = readFileSync(join(SRC_ROOT, "lib", filename), "utf8");
+      expect(source).toMatch(/^\s*import "server-only";/m);
+    },
+  );
 });
 
 /**
@@ -88,17 +96,24 @@ describe("no Client Component imports a server-only merchant module", () => {
   });
 
   it("the scanner itself correctly ignores a type-only import (control case, proves no false positives)", () => {
-    const offenders = findValueImportsOfServerOnlyModules('import type { MerchantProduct } from "@/lib/merchant-api";\n');
+    const offenders = findValueImportsOfServerOnlyModules(
+      'import type { MerchantProduct } from "@/lib/merchant-api";\n',
+    );
     expect(offenders).toEqual([]);
   });
 
   it("the scanner itself correctly flags a value import (control case, proves the check has teeth)", () => {
-    const offenders = findValueImportsOfServerOnlyModules('import { getMerchantApiKey } from "@/lib/merchant-session";\n');
+    const offenders = findValueImportsOfServerOnlyModules(
+      'import { getMerchantSessionToken } from "@/lib/merchant-session";\n',
+    );
     expect(offenders).toEqual(["@/lib/merchant-session"]);
   });
 
-  it.each(clientFiles.map((path) => [path.replace(SRC_ROOT, ""), path] as const))("%s never value-imports a server-only merchant module", (_label, path) => {
-    const source = readFileSync(path, "utf8");
-    expect(findValueImportsOfServerOnlyModules(source)).toEqual([]);
-  });
+  it.each(clientFiles.map((path) => [path.replace(SRC_ROOT, ""), path] as const))(
+    "%s never value-imports a server-only merchant module",
+    (_label, path) => {
+      const source = readFileSync(path, "utf8");
+      expect(findValueImportsOfServerOnlyModules(source)).toEqual([]);
+    },
+  );
 });

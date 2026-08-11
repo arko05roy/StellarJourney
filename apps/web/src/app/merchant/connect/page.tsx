@@ -1,47 +1,30 @@
-import { ConnectForm } from "@/components/merchant/connect-form";
-import { CreateMerchantForm } from "@/components/merchant/create-merchant-form";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
+import { loadDeployment } from "@paymap/contract-client";
+import { MerchantAuthPanel } from "@/components/merchant/merchant-auth-panel";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { resolveNetwork } from "@/lib/network";
 
-/**
- * Deliberately does NOT redirect away when a session cookie already exists
- * (unlike every other `/merchant/**` page, which all guard via
- * `requireMerchantApiKey`). `createMerchantAction` sets the cookie *and*
- * needs this exact page to keep rendering afterward so `CreateMerchantForm`
- * can show the newly issued key exactly once (CLAUDE.md §10) — a
- * cookie-presence redirect here would fire the instant the Server Action's
- * cookie mutation lands (Next.js re-renders this route's Server Component
- * as part of that same action response) and race the client past the
- * success view before anyone could ever see the key. This page staying
- * reachable while connected is also a reasonable, honest affordance on its
- * own (creating a second merchant account, or reconnecting with a
- * different key) — `layout.tsx`'s "Disconnect" control and nav remain
- * available here too when connected.
- */
+export const dynamic = "force-dynamic";
+
 export default function MerchantConnectPage() {
+  const deployment = loadDeployment(resolveNetwork());
+
   return (
-    <div className="mx-auto grid w-full max-w-3xl gap-6 py-10 md:grid-cols-2">
+    <div className="mx-auto w-full max-w-lg py-10">
       <Card>
         <CardHeader>
-          <CardTitle>New to Paymap</CardTitle>
-          <CardDescription>Create a merchant account and get your first API key.</CardDescription>
+          <CardTitle>Merchant sign in</CardTitle>
+          <CardDescription>
+            Connect the Stellar wallet that receives your Paymap settlements.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <CreateMerchantForm />
+          <MerchantAuthPanel networkPassphrase={deployment.networkPassphrase} />
         </CardContent>
       </Card>
-      <div className="flex flex-col gap-6 md:hidden">
-        <Separator />
-      </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Already have an API key</CardTitle>
-          <CardDescription>Reconnect to an existing merchant account.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ConnectForm />
-        </CardContent>
-      </Card>
+      <p className="mt-4 text-center text-xs text-muted-foreground">
+        API keys are created after sign-in under Developers. They are never used as your dashboard
+        password.
+      </p>
     </div>
   );
 }

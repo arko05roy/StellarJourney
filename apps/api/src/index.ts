@@ -20,6 +20,7 @@ async function main(): Promise<void> {
     prisma,
     mandateReader,
     hashSecret: env.API_KEY_HASH_SECRET,
+    merchantAuthDomain: env.MERCHANT_AUTH_DOMAIN,
     webhookEncryptionKey: env.WEBHOOK_ENCRYPTION_KEY,
     authorizationEncryptionKey: env.AUTHORIZATION_ENCRYPTION_KEY,
     chargeAuthorization: {

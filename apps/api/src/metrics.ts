@@ -23,7 +23,7 @@ export class ApiMetrics {
     });
     this.authRejections = new Counter({
       name: "paymap_api_auth_rejections_total",
-      help: "Rejected API-key authentication and authorization attempts.",
+      help: "Rejected merchant-session and API-key authentication attempts.",
       labelNames: ["reason"] as const,
       registers: [this.registry],
     });
@@ -45,6 +45,13 @@ const AUTH_REJECTION_CODES = new Set([
   "MISSING_API_KEY",
   "INVALID_API_KEY",
   "API_KEY_REVOKED",
+  "INVALID_MERCHANT_SESSION",
+  "MERCHANT_SESSION_EXPIRED",
+  "INVALID_AUTH_CHALLENGE",
+  "AUTH_CHALLENGE_EXPIRED",
+  "INVALID_WALLET_SIGNATURE",
+  "WALLET_ADDRESS_MISMATCH",
+  "MERCHANT_PROFILE_REQUIRED",
   "MERCHANT_DISABLED",
   "INSUFFICIENT_SCOPE",
 ]);

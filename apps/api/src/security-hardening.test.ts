@@ -19,21 +19,20 @@ describe("sensitive-route rate limits under burst load", () => {
     await testApp.prisma.$disconnect();
   });
 
-  it("caps merchant bootstrap at 5 requests/minute/IP", async () => {
+  it("caps merchant authentication challenges at 10 requests/minute/IP", async () => {
     const responses = [];
-    for (let index = 0; index < 6; index++) {
+    for (let index = 0; index < 11; index++) {
       responses.push(
         await testApp.app.inject({
           method: "POST",
-          url: "/v1/merchants",
+          url: "/v1/merchant-auth/challenges",
           payload: {
-            name: `Merchant ${String(index)}`,
             walletAddress: randomStellarAccountAddress(),
           },
         }),
       );
     }
-    expect(responses.filter((response) => response.statusCode === 201)).toHaveLength(5);
+    expect(responses.filter((response) => response.statusCode === 201)).toHaveLength(10);
     expect(responses.filter((response) => response.statusCode === 429)).toHaveLength(1);
   });
 

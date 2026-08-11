@@ -12,6 +12,7 @@ const validEnv: NodeJS.ProcessEnv = {
   WEBHOOK_ENCRYPTION_KEY: "whsec_example",
   AUTHORIZATION_ENCRYPTION_KEY: "authz_example",
   API_KEY_HASH_SECRET: "pepper",
+  MERCHANT_AUTH_DOMAIN: "localhost",
 };
 
 describe("loadEnv", () => {

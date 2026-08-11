@@ -148,6 +148,9 @@ importers:
       '@paymap/stellar':
         specifier: workspace:*
         version: link:../../packages/stellar
+      '@stellar/freighter-api':
+        specifier: ^6.0.0
+        version: 6.0.0
       '@stellar/stellar-sdk':
         specifier: ^16.1.0
         version: 16.1.0

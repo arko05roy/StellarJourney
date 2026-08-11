@@ -1,19 +1,21 @@
 /**
  * Fastify preHandler that resolves the calling merchant from the
- * `Authorization: Bearer <api key>` header. Attached per-route (every
- * `/v1/*` route except the unauthenticated `POST /v1/merchants` bootstrap
- * endpoint), not globally, so the bootstrap endpoint can remain
- * unauthenticated without an explicit opt-out mechanism.
+ * `Authorization: Bearer <credential>` header. Human dashboard requests use
+ * short-lived merchant sessions; integrations use scoped API keys.
  */
 import type { FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
 import { authenticateApiKey } from "./api-key.js";
-import { unauthorizedError } from "../errors.js";
-import type { ApiKey, Merchant, PrismaClient } from "../db.js";
+import { authenticateMerchantSession } from "./merchant-session.js";
+import { forbiddenError, unauthorizedError } from "../errors.js";
+import type { ApiKey, Merchant, MerchantSession, PrismaClient } from "../db.js";
 import { requireApiKeyScopes, type ApiKeyScope } from "./scopes.js";
+
+export type MerchantCredential =
+  { kind: "api_key"; apiKey: ApiKey } | { kind: "session"; session: MerchantSession };
 
 declare module "fastify" {
   interface FastifyRequest {
-    merchantContext?: { merchant: Merchant; apiKey: ApiKey };
+    merchantContext?: { merchant: Merchant; credential: MerchantCredential };
   }
 }
 
@@ -33,18 +35,43 @@ export function createAuthPreHandler(
     if (!match?.[1]) {
       throw unauthorizedError(
         "MISSING_API_KEY",
-        'Authorization header must be "Bearer <api key>".',
+        'Authorization header must be "Bearer <credential>".',
       );
     }
-    request.merchantContext = await authenticateApiKey(prisma, hashSecret, match[1]);
-    requireApiKeyScopes(request.merchantContext.apiKey, requiredScopes);
+    const rawCredential = match[1];
+    if (rawCredential.startsWith("pms_live_")) {
+      const authenticated = await authenticateMerchantSession(
+        prisma,
+        hashSecret,
+        rawCredential,
+        request.server.now(),
+      );
+      if (!authenticated.merchant) {
+        throw forbiddenError(
+          "MERCHANT_PROFILE_REQUIRED",
+          "Complete your merchant profile before continuing.",
+        );
+      }
+      request.merchantContext = {
+        merchant: authenticated.merchant,
+        credential: { kind: "session", session: authenticated.session },
+      };
+      return;
+    }
+
+    const authenticated = await authenticateApiKey(prisma, hashSecret, rawCredential);
+    requireApiKeyScopes(authenticated.apiKey, requiredScopes);
+    request.merchantContext = {
+      merchant: authenticated.merchant,
+      credential: { kind: "api_key", apiKey: authenticated.apiKey },
+    };
   };
 }
 
 /** Throws if called before the auth preHandler ran — a programming error in route wiring, not a client-facing failure mode. */
 export function requireMerchantContext(request: FastifyRequest): {
   merchant: Merchant;
-  apiKey: ApiKey;
+  credential: MerchantCredential;
 } {
   if (!request.merchantContext) {
     throw new Error(
@@ -52,4 +79,15 @@ export function requireMerchantContext(request: FastifyRequest): {
     );
   }
   return request.merchantContext;
+}
+
+export function requireApiKeyCredential(request: FastifyRequest): ApiKey {
+  const { credential } = requireMerchantContext(request);
+  if (credential.kind !== "api_key") {
+    throw forbiddenError(
+      "API_KEY_CREDENTIAL_REQUIRED",
+      "This operation requires an API key credential.",
+    );
+  }
+  return credential.apiKey;
 }

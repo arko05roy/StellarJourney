@@ -98,7 +98,7 @@ const webhookEndpointsRoutes: FastifyPluginAsync = async (app) => {
 
       reply.status(201).send({
         webhookUrl: input.url,
-        // Shown once, here, and never again — not retrievable through any other endpoint (mirrors POST /v1/merchants and the API-key rotation endpoint).
+        // Shown once, here, and never again — mirrors scoped API-key issuance.
         webhookSecret: rawSecret,
       });
     },

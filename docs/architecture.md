@@ -428,12 +428,12 @@ skip path.
 
 The merchant dashboard (PLAN.md §16.3: Products, Checkout links, Active mandates, Upcoming/Failed
 collections, Payments, Refunds, Developers, Webhooks) is architecturally the opposite of Phases
-10-11's consumer checkout/dashboard: those are entirely client-side (browser wallet signs directly
-against Soroban RPC, no secret ever exists), while every merchant view is authenticated with a
-**merchant API key** that must never reach client-side JavaScript (this phase's lead decision #1).
-That constraint drives every layering choice below.
+10-11's consumer checkout/dashboard: those are entirely client-side, while merchant onboarding
+first proves ownership of the settlement wallet with a single-use signed-message challenge. The
+API then issues a 24-hour opaque dashboard session. Optional scoped API keys are separate
+server-to-server integration credentials.
 
-### The API-key boundary: `server-only`, not just convention
+### The merchant-credential boundary: `server-only`, not just convention
 
 `lib/merchant-session.ts` (httpOnly cookie read/write) and `lib/merchant-api.ts` (the typed
 `/v1/*` client) both start with `import "server-only"` — the real npm package that makes `next
@@ -445,18 +445,15 @@ one, which is erased and harmless — the same distinction `tasks/lessons.md` al
 this repo's other server-only-adjacent barrels) of either module, so a violation is caught by
 `pnpm test` without waiting for a full `next build`.
 
-The key itself lives only in an httpOnly, `sameSite: "lax"` cookie
-(`MERCHANT_API_KEY_COOKIE`) — there is no merchant login system in this MVP (no email/password,
-no OAuth); the API key _is_ the identity, exactly as `apps/api`'s own auth already models it. A
-merchant either creates a new account (`POST /v1/merchants`, unauthenticated bootstrap) or pastes
-an existing key back in (`/merchant/connect`'s "Already have an API key" form, which verifies the
-key with a real authenticated call before storing it, so a stale/revoked key fails immediately
-with a clear error rather than silently breaking every later page).
+The opaque session lives only in an httpOnly, `sameSite: "lax"` cookie
+(`MERCHANT_SESSION_COOKIE`). `/merchant/connect` asks Freighter to connect, verifies the configured
+Stellar network, signs the exact server challenge, and creates or restores the merchant profile
+bound to that address. No manually typed payout address and no API-key login remain.
 
 ### Server Components read, Server Actions write
 
 Every `app/merchant/**/page.tsx` (except `connect/page.tsx` itself) is an `async` Server Component
-that calls `requireMerchantApiKey()` (`lib/merchant-guard.ts`, redirects to `/merchant/connect` if
+that calls `requireMerchantSession()` (`lib/merchant-guard.ts`, redirects to `/merchant/connect` if
 no cookie) and then fetches directly from `lib/merchant-api.ts` — no client-side `fetch` ever
 carries the `Authorization` header. Every mutation (`lib/merchant-actions.ts`) is a `"use server"`
 Server Action following one pattern: read the cookie server-side, validate, call the API, and
@@ -465,18 +462,10 @@ return a discriminated `{ ok: true, ... } | { ok: false, error, fieldErrors? }` 
 (Next.js's redirect mechanism throws a special signal that a generic catch would otherwise
 swallow).
 
-### The "show a secret exactly once" pattern, and the bug it exposed
+### The "show a secret exactly once" pattern
 
-`createMerchantAction`/`rotateApiKeyAction`/`registerWebhookEndpointAction` all set a cookie (or
-persist a secret) _and_ need to keep rendering the current page afterward, so the freshly issued
-value can be shown to the merchant exactly once (CLAUDE.md §10) — never a URL, never re-fetchable.
-This surfaced a real bug during development: `connect/page.tsx` originally redirected away the
-instant a session cookie was present, and Next.js re-renders a route's Server Components as part
-of the _same_ action response when a Server Action mutates cookies — so `createMerchantAction`'s
-cookie write raced the client past the success view before anyone could ever see the key. Fixed by
-making `/merchant/connect` the one page that never guards on cookie presence (see its own module
-doc); every other page's guard is unaffected since none of them ever need to render a
-just-issued-secret success state.
+`createApiKeyAction` and `registerWebhookEndpointAction` render newly created integration/webhook
+secrets exactly once. Existing secrets remain hashed or encrypted and are never re-fetched.
 
 ### Reused, not duplicated, business logic
 

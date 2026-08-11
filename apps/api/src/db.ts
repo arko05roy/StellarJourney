@@ -28,6 +28,8 @@ export type {
   IdempotencyKey,
   MandateIndex,
   Merchant,
+  MerchantAuthChallenge,
+  MerchantSession,
   Payment,
   Product,
   RefundRequest,

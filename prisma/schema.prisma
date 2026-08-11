@@ -113,7 +113,7 @@ model User {
 model Merchant {
   id            String         @id @default(uuid())
   name          String
-  walletAddress String
+  walletAddress String         @unique
   webhookUrl    String?
   webhookSecret String?
   status        MerchantStatus @default(active)
@@ -121,6 +121,7 @@ model Merchant {
   updatedAt     DateTime       @updatedAt
 
   apiKeys              ApiKey[]
+  sessions             MerchantSession[]
   products             Product[]
   checkoutSessions     CheckoutSession[]
   mandateIndexes       MandateIndex[]
@@ -130,6 +131,43 @@ model Merchant {
   refundRequests       RefundRequest[]
   webhookDeliveries    WebhookDelivery[]
   idempotencyKeys      IdempotencyKey[]
+}
+
+/// Single-use wallet ownership challenge. The signed message is returned to
+/// the browser, while only its SHA-256 digest is stored. `usedAt` makes
+/// successful verification replay-safe even when completion races.
+model MerchantAuthChallenge {
+  id                String    @id @default(uuid())
+  walletAddress     String
+  messageHash       String
+  networkPassphrase String
+  expiresAt         DateTime
+  usedAt            DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([walletAddress])
+  @@index([expiresAt])
+}
+
+/// Opaque, short-lived credential for the human merchant dashboard. The raw
+/// token is never stored; API keys remain separate integration credentials.
+/// `merchantId` is nullable only during the verified-wallet onboarding step.
+model MerchantSession {
+  id            String    @id @default(uuid())
+  merchantId    String?
+  merchant      Merchant? @relation(fields: [merchantId], references: [id])
+  walletAddress String
+  tokenPrefix   String
+  tokenHash     String    @unique
+  expiresAt     DateTime
+  lastUsedAt    DateTime?
+  revokedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([merchantId])
+  @@index([walletAddress])
+  @@index([tokenPrefix])
+  @@index([expiresAt])
 }
 
 /// Hashed at rest via HMAC-SHA256 with `API_KEY_HASH_SECRET` as the pepper

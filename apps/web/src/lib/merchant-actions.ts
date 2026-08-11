@@ -1,14 +1,9 @@
 /**
  * Server Actions for the merchant dashboard (`app/merchant/**`). Every
- * mutation here reads the merchant's API key from the httpOnly cookie
- * (`merchant-session.ts`) server-side and calls the merchant API
- * (`merchant-api.ts`) server-side — the browser never sees the key, whether
- * on success or failure (this file is itself `"use server"`-only code,
- * never bundled to the client; only the plain-object *results* it returns
- * cross the wire, and none of them ever contain the API key itself except
- * the three explicit "show a new/rotated secret once" actions, which is the
- * same one-time-display contract `apps/api`'s own key-issuance endpoints
- * use).
+ * mutation here reads the wallet-authenticated merchant session from an
+ * httpOnly cookie and calls the merchant API server-side. Scoped integration
+ * keys only cross the browser boundary in the explicit one-time create-key
+ * response.
  *
  * Pattern: every action returns a discriminated `{ ok: true, ... } | { ok:
  * false, error, fieldErrors? }` result for `useActionState` rather than
@@ -22,21 +17,34 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { clearMerchantApiKey, getMerchantApiKey, setMerchantApiKey } from "./merchant-session";
+import {
+  clearMerchantSessionToken,
+  getMerchantSessionToken,
+  setMerchantSessionToken,
+} from "./merchant-session";
 import {
   MerchantApiError,
+  MerchantApiKeyScopeSchema,
+  completeMerchantAuth,
   createCheckoutSession,
-  createMerchant,
+  createMerchantApiKey,
+  createMerchantAuthChallenge,
   createProduct,
   createRefund,
-  getWebhookEndpointStatus,
+  logoutMerchantSession,
   registerWebhookEndpoint,
-  rotateApiKey,
-  type CreateMerchantResponse,
+  registerMerchantProfile,
+  revokeMerchantApiKey,
+  type CreateMerchantApiKeyResponse,
+  type MerchantAuthChallenge,
+  type MerchantApiKeyScope,
   type RegisterWebhookEndpointResponse,
-  type RotateApiKeyResponse,
 } from "./merchant-api";
-import { validateProductForm, type ProductFormErrors, type ProductFormValues } from "./merchant-product-form";
+import {
+  validateProductForm,
+  type ProductFormErrors,
+  type ProductFormValues,
+} from "./merchant-product-form";
 import { validateRefundAmount } from "./merchant-refund-form";
 
 export interface ActionError {
@@ -45,88 +53,126 @@ export interface ActionError {
 }
 
 // ---------------------------------------------------------------------------
-// Connect / bootstrap / disconnect
+// Wallet authentication / profile / disconnect
 // ---------------------------------------------------------------------------
 
-export type ConnectActionState = { ok: false; error: string } | { ok: true } | undefined;
+export type MerchantChallengeActionResult =
+  { ok: true; challenge: MerchantAuthChallenge } | { ok: false; error: string };
 
-/** Verifies the pasted key actually authenticates (a cheap real API call, not just a format check) before storing it — a merchant pasting a stale/revoked key gets a clear error immediately, not a broken dashboard later. */
-export async function connectWithApiKeyAction(_prevState: ConnectActionState, formData: FormData): Promise<ConnectActionState> {
-  const apiKey = String(formData.get("apiKey") ?? "").trim();
-  if (apiKey.length === 0) {
-    return { ok: false, error: "Enter your API key." };
-  }
+export async function createMerchantChallengeAction(
+  walletAddress: string,
+): Promise<MerchantChallengeActionResult> {
   try {
-    await getWebhookEndpointStatus(apiKey);
-  } catch (error) {
-    if (error instanceof MerchantApiError) {
-      return { ok: false, error: error.status === 401 ? "That API key was not recognized." : error.message };
-    }
-    throw error;
-  }
-  await setMerchantApiKey(apiKey);
-  redirect("/merchant/products");
-}
-
-export type CreateMerchantActionState = { ok: false; error: string } | { ok: true; result: CreateMerchantResponse } | undefined;
-
-/**
- * Bootstrap a brand-new merchant account. Unlike every other action here,
- * this one does NOT redirect on success — the newly-issued key must be
- * shown to the merchant right now (it can never be retrieved again,
- * CLAUDE.md §10), so the calling Client Component keeps it in local state
- * for exactly one render and offers a "Continue" link once the merchant has
- * copied it.
- */
-export async function createMerchantAction(_prevState: CreateMerchantActionState, formData: FormData): Promise<CreateMerchantActionState> {
-  const name = String(formData.get("name") ?? "").trim();
-  const walletAddress = String(formData.get("walletAddress") ?? "").trim();
-  if (name.length === 0) return { ok: false, error: "Business name is required." };
-  if (walletAddress.length === 0) return { ok: false, error: "Your Stellar wallet address is required." };
-
-  try {
-    const result = await createMerchant({ name, walletAddress });
-    await setMerchantApiKey(result.apiKey);
-    return { ok: true, result };
+    return {
+      ok: true,
+      challenge: await createMerchantAuthChallenge(walletAddress),
+    };
   } catch (error) {
     if (error instanceof MerchantApiError) return { ok: false, error: error.message };
     throw error;
   }
 }
 
+export type CompleteMerchantAuthActionResult =
+  { ok: true; profileRequired: true; walletAddress: string } | { ok: false; error: string };
+
+export async function completeMerchantAuthAction(input: {
+  challengeId: string;
+  message: string;
+  signature: string;
+  signerAddress: string;
+}): Promise<CompleteMerchantAuthActionResult> {
+  let profileRequired = false;
+  try {
+    const result = await completeMerchantAuth(input);
+    await setMerchantSessionToken(result.sessionToken);
+    profileRequired = result.profileRequired;
+  } catch (error) {
+    if (error instanceof MerchantApiError) return { ok: false, error: error.message };
+    throw error;
+  }
+  if (!profileRequired) redirect("/merchant/products");
+  return {
+    ok: true,
+    profileRequired: true,
+    walletAddress: input.signerAddress,
+  };
+}
+
+export type RegisterMerchantActionState = { ok: false; error: string } | undefined;
+
+export async function registerMerchantProfileAction(
+  _prevState: RegisterMerchantActionState,
+  formData: FormData,
+): Promise<RegisterMerchantActionState> {
+  const sessionToken = await getMerchantSessionToken();
+  if (!sessionToken) return { ok: false, error: "Connect and sign with your wallet first." };
+  const name = String(formData.get("name") ?? "").trim();
+  if (name.length === 0) return { ok: false, error: "Business name is required." };
+  try {
+    await registerMerchantProfile(sessionToken, name);
+  } catch (error) {
+    if (error instanceof MerchantApiError) return { ok: false, error: error.message };
+    throw error;
+  }
+  redirect("/merchant/products");
+}
+
 export async function disconnectAction(): Promise<void> {
-  await clearMerchantApiKey();
+  const sessionToken = await getMerchantSessionToken();
+  if (sessionToken) {
+    await logoutMerchantSession(sessionToken).catch(() => undefined);
+  }
+  await clearMerchantSessionToken();
   redirect("/merchant/connect");
 }
 
 // ---------------------------------------------------------------------------
-// Developers — API key rotation
+// Developers — scoped integration API keys
 // ---------------------------------------------------------------------------
 
-export type RotateApiKeyActionState = { ok: false; error: string } | { ok: true; result: RotateApiKeyResponse } | undefined;
+export type CreateApiKeyActionState =
+  { ok: false; error: string } | { ok: true; result: CreateMerchantApiKeyResponse } | undefined;
 
-export async function rotateApiKeyAction(_prevState: RotateApiKeyActionState): Promise<RotateApiKeyActionState> {
-  const apiKey = await getMerchantApiKey();
-  if (!apiKey) return { ok: false, error: "Not connected." };
+export async function createApiKeyAction(
+  _prevState: CreateApiKeyActionState,
+  formData: FormData,
+): Promise<CreateApiKeyActionState> {
+  const sessionToken = await getMerchantSessionToken();
+  if (!sessionToken) return { ok: false, error: "Not connected." };
+  const name = String(formData.get("name") ?? "").trim();
+  if (!name) return { ok: false, error: "Key name is required." };
+  const parsedScopes = formData.getAll("scopes").map(String);
+  const scopesResult = MerchantApiKeyScopeSchema.array().min(1).safeParse(parsedScopes);
+  if (!scopesResult.success) return { ok: false, error: "Choose at least one permission." };
   try {
-    const result = await rotateApiKey(apiKey);
-    // The old key is revoked the instant this call returns (`apps/api`'s
-    // `rotateApiKey` marks it `revoked` before responding) — the cookie
-    // must be swapped immediately or every subsequent request on this
-    // dashboard would start failing with 401s using the now-dead key.
-    await setMerchantApiKey(result.apiKey);
+    const result = await createMerchantApiKey(sessionToken, {
+      name,
+      scopes: scopesResult.data as MerchantApiKeyScope[],
+    });
+    revalidatePath("/merchant/developers");
     return { ok: true, result };
   } catch (error) {
     if (error instanceof MerchantApiError) return { ok: false, error: error.message };
     throw error;
   }
+}
+
+export async function revokeApiKeyAction(formData: FormData): Promise<void> {
+  const sessionToken = await getMerchantSessionToken();
+  if (!sessionToken) redirect("/merchant/connect");
+  const apiKeyId = String(formData.get("apiKeyId") ?? "").trim();
+  if (!apiKeyId) return;
+  await revokeMerchantApiKey(sessionToken, apiKeyId);
+  revalidatePath("/merchant/developers");
 }
 
 // ---------------------------------------------------------------------------
 // Products
 // ---------------------------------------------------------------------------
 
-export type ProductActionState = { ok: false; error: string; fieldErrors?: ProductFormErrors } | { ok: true } | undefined;
+export type ProductActionState =
+  { ok: false; error: string; fieldErrors?: ProductFormErrors } | { ok: true } | undefined;
 
 function extractProductFormValues(formData: FormData): ProductFormValues {
   const get = (key: string) => String(formData.get(key) ?? "");
@@ -146,13 +192,20 @@ function extractProductFormValues(formData: FormData): ProductFormValues {
   };
 }
 
-export async function createProductAction(_prevState: ProductActionState, formData: FormData): Promise<ProductActionState> {
-  const apiKey = await getMerchantApiKey();
+export async function createProductAction(
+  _prevState: ProductActionState,
+  formData: FormData,
+): Promise<ProductActionState> {
+  const apiKey = await getMerchantSessionToken();
   if (!apiKey) return { ok: false, error: "Not connected." };
 
   const validation = validateProductForm(extractProductFormValues(formData));
   if (!validation.valid) {
-    return { ok: false, error: "Fix the highlighted fields before continuing.", fieldErrors: validation.errors };
+    return {
+      ok: false,
+      error: "Fix the highlighted fields before continuing.",
+      fieldErrors: validation.errors,
+    };
   }
 
   try {
@@ -171,8 +224,11 @@ export async function createProductAction(_prevState: ProductActionState, formDa
 
 export type CheckoutLinkActionState = ActionError | undefined;
 
-export async function generateCheckoutLinkAction(_prevState: CheckoutLinkActionState, formData: FormData): Promise<CheckoutLinkActionState> {
-  const apiKey = await getMerchantApiKey();
+export async function generateCheckoutLinkAction(
+  _prevState: CheckoutLinkActionState,
+  formData: FormData,
+): Promise<CheckoutLinkActionState> {
+  const apiKey = await getMerchantSessionToken();
   if (!apiKey) return { ok: false, error: "Not connected." };
   const productId = String(formData.get("productId") ?? "").trim();
   if (productId.length === 0) return { ok: false, error: "Choose a product first." };
@@ -193,8 +249,11 @@ export async function generateCheckoutLinkAction(_prevState: CheckoutLinkActionS
 
 export type RefundActionState = ActionError | undefined;
 
-export async function createRefundAction(_prevState: RefundActionState, formData: FormData): Promise<RefundActionState> {
-  const apiKey = await getMerchantApiKey();
+export async function createRefundAction(
+  _prevState: RefundActionState,
+  formData: FormData,
+): Promise<RefundActionState> {
+  const apiKey = await getMerchantSessionToken();
   if (!apiKey) return { ok: false, error: "Not connected." };
   const paymentId = String(formData.get("paymentId") ?? "").trim();
   const amount = String(formData.get("amount") ?? "").trim();
@@ -219,10 +278,14 @@ export async function createRefundAction(_prevState: RefundActionState, formData
 // Webhooks
 // ---------------------------------------------------------------------------
 
-export type RegisterWebhookActionState = { ok: false; error: string } | { ok: true; result: RegisterWebhookEndpointResponse } | undefined;
+export type RegisterWebhookActionState =
+  { ok: false; error: string } | { ok: true; result: RegisterWebhookEndpointResponse } | undefined;
 
-export async function registerWebhookEndpointAction(_prevState: RegisterWebhookActionState, formData: FormData): Promise<RegisterWebhookActionState> {
-  const apiKey = await getMerchantApiKey();
+export async function registerWebhookEndpointAction(
+  _prevState: RegisterWebhookActionState,
+  formData: FormData,
+): Promise<RegisterWebhookActionState> {
+  const apiKey = await getMerchantSessionToken();
   if (!apiKey) return { ok: false, error: "Not connected." };
   const url = String(formData.get("url") ?? "").trim();
   if (url.length === 0) return { ok: false, error: "Enter a webhook URL." };

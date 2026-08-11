@@ -164,5 +164,6 @@ link-local, unsafe DNS, and redirects.
   the contract accept an invalid final transaction. The indexer fails loudly on retention gaps.
 - **Monitoring delivery.** Prometheus samples and Alertmanager state persist on Render disks.
   Alerts are visible in Alertmanager/Grafana, but email delivery is intentionally unconfigured.
-- **Merchant onboarding.** API keys are scoped and revocable, but merchant bootstrap remains a
-  public rate-limited endpoint. Add business verification before public production onboarding.
+- **Merchant identity versus business identity.** Wallet ownership is proven with an exact,
+  expiring, one-time signed challenge before profile creation. This proves control of the payout
+  wallet, not the merchant's legal business identity; add KYB only when the product requires it.

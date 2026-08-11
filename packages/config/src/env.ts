@@ -16,6 +16,7 @@ const envSchema = z.object({
   WEBHOOK_ENCRYPTION_KEY: z.string().min(1, "WEBHOOK_ENCRYPTION_KEY is required"),
   AUTHORIZATION_ENCRYPTION_KEY: z.string().min(1, "AUTHORIZATION_ENCRYPTION_KEY is required"),
   API_KEY_HASH_SECRET: z.string().min(1, "API_KEY_HASH_SECRET is required"),
+  MERCHANT_AUTH_DOMAIN: z.string().min(1, "MERCHANT_AUTH_DOMAIN is required"),
 });
 
 const apiEnvSchema = envSchema.omit({
@@ -25,6 +26,7 @@ const apiEnvSchema = envSchema.omit({
 
 const relayerEnvSchema = envSchema.omit({
   API_KEY_HASH_SECRET: true,
+  MERCHANT_AUTH_DOMAIN: true,
 });
 
 export type Env = z.infer<typeof envSchema>;

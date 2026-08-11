@@ -48,6 +48,8 @@ export async function cleanDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.checkoutSession.deleteMany();
   await prisma.product.deleteMany();
   await prisma.apiKey.deleteMany();
+  await prisma.merchantSession.deleteMany();
+  await prisma.merchantAuthChallenge.deleteMany();
   await prisma.merchant.deleteMany();
   await prisma.user.deleteMany();
 }
@@ -146,6 +148,7 @@ export function buildTestApp(): TestApp {
     prisma,
     mandateReader,
     hashSecret: TEST_HASH_SECRET,
+    merchantAuthDomain: "localhost:4321",
     webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
     authorizationEncryptionKey: TEST_AUTHORIZATION_ENCRYPTION_KEY,
     chargeAuthorization: {

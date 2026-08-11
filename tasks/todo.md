@@ -2275,3 +2275,73 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 #### Follow-ups
 
 - Push the branch and allow Vercel to redeploy the new root route.
+
+---
+
+## Phase 19 - Merchant Wallet Authentication
+
+### Plan
+
+- [x] Add single-use, expiring merchant wallet challenges and opaque dashboard sessions.
+- [x] Verify Freighter signed messages against the configured Stellar network and exact challenge.
+- [x] Authenticate existing merchants by wallet; require verified wallet ownership before creating
+      a new merchant profile.
+- [x] Remove unauthenticated merchant bootstrap and API-key-as-dashboard-login behavior.
+- [x] Keep legacy API keys working for integrations while moving list/create/revoke scoped keys
+      into Developers.
+- [x] Replace merchant onboarding with connect wallet, sign in, and new-profile completion states.
+- [x] Update architecture, merchant API docs, environment examples, and focused security tests.
+- [ ] Apply the Prisma migration, deploy API/web, and smoke-test the live authentication surface.
+
+### Verification
+
+- [x] Prisma migration applies to clean and current schemas
+- [x] API auth/challenge/session/scoped-key tests pass
+- [x] Web merchant onboarding and Developers tests pass
+- [x] `pnpm lint`
+- [x] `pnpm typecheck`
+- [x] `pnpm build`
+- [x] `pnpm test`
+- [x] `git diff --check`
+- [ ] Render API ready and Vercel merchant routes return 200
+
+### Files likely touched
+
+- `prisma/schema.prisma`, `prisma/migrations/*`
+- `apps/api/src/auth/*`, `apps/api/src/routes/merchants*`, `apps/api/src/schemas/merchants*`
+- `apps/web/src/app/merchant/*`, `apps/web/src/components/merchant/*`
+- `apps/web/src/lib/{merchant-actions,merchant-api,merchant-guard,merchant-session}*`
+- `.env.example`, `docs/{architecture,merchant-api,threat-model}.md`
+
+### Questions
+
+- [x] Architecture: wallet-signed challenge for human sessions; scoped API keys remain
+      server-to-server credentials.
+
+### Review
+
+#### Changed
+
+- Replaced API-key dashboard login with Freighter wallet ownership challenges and 24-hour
+  httpOnly-backed merchant sessions.
+- Removed public merchant bootstrap; new profiles now require a verified payout wallet.
+- Added scoped integration-key list/create/revoke controls under Developers while preserving
+  existing API-key integrations.
+- Added challenge/session persistence, a production migration, configuration, docs, and E2E
+  coverage.
+
+#### Verified
+
+- Prisma migration applied to both existing API and relayer test schemas; schema validation passes.
+- All 638 package tests and 8 Playwright flows pass.
+- Lint, typecheck, production build, and `git diff --check` pass.
+
+#### Risks
+
+- Production migration intentionally fails if legacy merchants share a wallet address; duplicates
+  must be resolved rather than silently merged.
+- Render's free service can cold-start slowly after inactivity.
+
+#### Follow-ups
+
+- Deploy and smoke-test Render and Vercel.

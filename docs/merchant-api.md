@@ -11,10 +11,17 @@ confirmed on-chain result.
 
 ## Scope note: endpoints beyond PLAN.md §14's literal list
 
-PLAN.md §14 lists ten endpoints. Ten more exist and are documented here:
+PLAN.md §14 lists ten endpoints. Authentication, key-management, webhook, and dashboard-list
+endpoints also exist:
 
 ```text
-POST   /v1/merchants                       (bootstrap: create a merchant + first API key)
+POST   /v1/merchant-auth/challenges        (single-use wallet ownership challenge)
+POST   /v1/merchant-auth/complete          (verify signature + issue dashboard session)
+POST   /v1/merchant-auth/register          (create profile for a verified wallet)
+POST   /v1/merchant-auth/logout            (revoke dashboard session)
+GET    /v1/merchants/me/api-keys           (list integration keys)
+POST   /v1/merchants/me/api-keys           (create a scoped integration key)
+DELETE /v1/merchants/me/api-keys/:id       (revoke an integration key)
 POST   /v1/merchants/me/api-keys/rotate    (rotate: issue a new key, revoke the old one)
 POST   /v1/webhook-endpoints               (Phase 12a: register/rotate the real delivery URL + secret)
 GET    /v1/webhook-endpoints               (Phase 12a: status read, never the secret)
@@ -26,9 +33,9 @@ GET    /v1/refunds                         (Phase 12b: merchant's refund-request
 GET    /v1/webhook-deliveries              (Phase 12b: merchant's webhook delivery history)
 ```
 
-The first two exist because CLAUDE.md §10 explicitly requires API-key **issuance** and
-**rotation**, with the full key shown exactly once, and there is no way to obtain the first key
-without _some_ endpoint. The webhook-endpoints pair exists because real signed delivery
+Human merchant authentication is deliberately separate from integration credentials: wallet
+ownership creates a short-lived dashboard session, while API keys are optional, scoped, and
+created afterward under Developers. The webhook-endpoints pair exists because real signed delivery
 (CLAUDE.md §12) needs somewhere to register a URL and secret — `PLAN.md §14`'s
 `POST /v1/webhook-endpoints/test` alone only ever validated a candidate URL, it never persisted
 one. The six Phase 12b `GET .../` list endpoints exist because PLAN.md §14 only ever specifies
@@ -40,18 +47,24 @@ auth/ownership rules exactly, just without the `:id`. Everything else matches PL
 
 ## Authentication
 
-Every endpoint except `POST /v1/merchants` requires:
+The challenge and completion endpoints are public but rate-limited. Completion succeeds only for
+the exact, unexpired, unused message signed by the requested Stellar account.
+
+Dashboard requests use:
 
 ```text
-Authorization: Bearer <api key>
+Authorization: Bearer pms_live_<opaque session>
 ```
 
-API keys look like `sk_live_<random>`. They are **hashed at rest** with HMAC-SHA256, using
+Sessions expire after 24 hours, are revocable, and are stored hashed at rest. They authorize a
+human dashboard session only; they are not API keys.
+
+Server integrations use `Authorization: Bearer sk_live_<random>`. API keys are **hashed at rest** with HMAC-SHA256, using
 `API_KEY_HASH_SECRET` as the pepper (never a bare hash — the secret must matter, or a stolen
 database dump alone would be dictionary-attackable). Verification is a constant-time comparison
 of the full digest (`node:crypto`'s `timingSafeEqual`), not a substring/prefix check.
 
-The **full key is shown exactly once** — at creation, and again at rotation. It is never stored
+The **full API key is shown exactly once** — at creation, and again at legacy rotation. It is never stored
 in recoverable form and never returned by any other endpoint.
 
 ### Scoped keys
@@ -64,8 +77,9 @@ mandates:read charges:read charges:write payments:read refunds:read refunds:writ
 webhooks:read webhooks:write api_keys:manage
 ```
 
-The bootstrap key has all scopes. A key with `api_keys:manage` can list, create, and revoke
-merchant keys. Missing permission returns `403 INSUFFICIENT_SCOPE` before resource lookup.
+New merchants receive no API key automatically. A wallet session or a key with
+`api_keys:manage` can list, create, and revoke merchant keys. Missing permission returns
+`403 INSUFFICIENT_SCOPE` before resource lookup.
 `POST /v1/merchants/me/api-keys`, `GET /v1/merchants/me/api-keys`, and
 `DELETE /v1/merchants/me/api-keys/:id` manage keys; a key cannot revoke itself.
 
@@ -89,13 +103,19 @@ a window with zero or two active keys. Any request using the old key after this 
 
 ### Auth error codes
 
-| Code                 | HTTP | Meaning                                                       |
-| -------------------- | ---- | ------------------------------------------------------------- |
-| `MISSING_API_KEY`    | 401  | No `Authorization` header, or not `Bearer <key>` shaped.      |
-| `INVALID_API_KEY`    | 401  | Header present but no stored key hash matches.                |
-| `API_KEY_REVOKED`    | 401  | The hash matches a key that has since been rotated out.       |
-| `MERCHANT_DISABLED`  | 403  | The key is valid but the merchant account itself is disabled. |
-| `INSUFFICIENT_SCOPE` | 403  | The key lacks a scope required by the route.                  |
+| Code                       | HTTP | Meaning                                                       |
+| -------------------------- | ---- | ------------------------------------------------------------- |
+| `MISSING_API_KEY`          | 401  | No `Authorization` header, or not `Bearer <key>` shaped.      |
+| `INVALID_API_KEY`          | 401  | Header present but no stored key hash matches.                |
+| `API_KEY_REVOKED`          | 401  | The hash matches a key that has since been rotated out.       |
+| `INVALID_MERCHANT_SESSION` | 401  | Dashboard session token is malformed or unknown.              |
+| `MERCHANT_SESSION_EXPIRED` | 401  | Dashboard session expired or was revoked.                     |
+| `INVALID_AUTH_CHALLENGE`   | 401  | Wallet challenge is missing or altered.                       |
+| `AUTH_CHALLENGE_EXPIRED`   | 401  | Wallet challenge exceeded its five-minute lifetime.           |
+| `INVALID_WALLET_SIGNATURE` | 401  | Signature does not verify for the connected account.          |
+| `WALLET_ADDRESS_MISMATCH`  | 401  | A different wallet signed the challenge.                      |
+| `MERCHANT_DISABLED`        | 403  | The key is valid but the merchant account itself is disabled. |
+| `INSUFFICIENT_SCOPE`       | 403  | The key lacks a scope required by the route.                  |
 
 ## Idempotency
 
@@ -206,7 +226,8 @@ only ones this API's own `Product` catalog knows the decimals for, so its amount
 
 | Endpoint                                | Limit                            |
 | --------------------------------------- | -------------------------------- |
-| `POST /v1/merchants`                    | 5 / minute                       |
+| merchant auth challenge/complete        | 10 / minute                      |
+| merchant profile registration           | 5 / minute                       |
 | `POST /v1/merchants/me/api-keys/rotate` | 5 / minute                       |
 | charge authorization create/complete    | 30 / minute                      |
 | everything else                         | 1000 / minute (generous default) |
@@ -218,27 +239,18 @@ refinement, not required for this phase).
 
 ## Endpoints
 
-### `POST /v1/merchants`
+### Merchant wallet authentication
 
-No authentication (this _is_ the bootstrap). Rate-limited.
+1. `POST /v1/merchant-auth/challenges` with `{ "walletAddress": "G..." }`.
+2. Sign the returned exact `message` with Freighter `signMessage`.
+3. `POST /v1/merchant-auth/complete` with the challenge id, message, base64 signature, and signer.
+4. Store the returned `pms_live_...` session only in an httpOnly cookie.
+5. When `profileRequired` is true, call `POST /v1/merchant-auth/register` with the session and
+   business name.
 
-```json
-{ "name": "Acme Inc", "walletAddress": "GABC...5EQQ" }
-```
-
-→ `201`
-
-```json
-{
-  "merchantId": "…",
-  "name": "Acme Inc",
-  "walletAddress": "GABC...5EQQ",
-  "apiKeyId": "…",
-  "apiKey": "sk_live_…"
-}
-```
-
-`apiKey` is shown once, here.
+Challenges expire after five minutes and are consumed atomically. The signed message binds the
+wallet, Stellar network passphrase, nonce, issue time, expiry, and Paymap authentication purpose.
+It does not submit a transaction or move funds.
 
 ### `POST /v1/products`
 

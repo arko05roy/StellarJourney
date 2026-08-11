@@ -4,7 +4,7 @@ import {
   type Server as HttpServer,
   type ServerResponse,
 } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { Asset, hash, Keypair, Networks } from "@stellar/stellar-sdk";
 import { expect, test } from "@playwright/test";
@@ -25,9 +25,13 @@ const API_URL = `http://127.0.0.1:${String(API_PORT)}`;
 const TESTNET_FRIENDBOT = "https://friendbot.stellar.org";
 const deployment = loadDeployment("testnet");
 
-interface MerchantBootstrap {
-  merchantId: string;
-  apiKey: string;
+interface MerchantAuthChallenge {
+  challengeId: string;
+  message: string;
+}
+
+interface MerchantAuthComplete {
+  sessionToken: string;
 }
 
 interface ProductResponse {
@@ -281,6 +285,7 @@ test.describe.serial("Phase 13 — real testnet full chain", () => {
       prisma,
       mandateReader: createChainMandateReader(deployment),
       hashSecret: randomBytes(32).toString("hex"),
+      merchantAuthDomain: "localhost:4321",
       webhookEncryptionKey,
       authorizationEncryptionKey,
       chargeAuthorization: {
@@ -296,20 +301,38 @@ test.describe.serial("Phase 13 — real testnet full chain", () => {
     api = buildApp(apiOptions);
     await api.listen({ port: API_PORT, host: "127.0.0.1" });
 
-    const merchant = await apiJson<MerchantBootstrap>("/v1/merchants", {
+    const challenge = await apiJson<MerchantAuthChallenge>("/v1/merchant-auth/challenges", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        name: "Phase 13 Testnet Merchant",
         walletAddress: merchantSigner.publicKey,
       }),
     });
+    const authDigest = createHash("sha256")
+      .update("Stellar Signed Message:\n", "utf8")
+      .update(challenge.message, "utf8")
+      .digest();
+    const authenticated = await apiJson<MerchantAuthComplete>("/v1/merchant-auth/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        challengeId: challenge.challengeId,
+        message: challenge.message,
+        signature: merchantSigner.keypair.sign(authDigest).toString("base64"),
+        signerAddress: merchantSigner.publicKey,
+      }),
+    });
+    merchantApiKey = authenticated.sessionToken;
+    const merchant = await apiJson<{ merchantId: string }>("/v1/merchant-auth/register", {
+      method: "POST",
+      headers: merchantHeaders(merchantApiKey),
+      body: JSON.stringify({ name: "Phase 13 Testnet Merchant" }),
+    });
     merchantId = merchant.merchantId;
-    merchantApiKey = merchant.apiKey;
 
     const webhook = await apiJson<{ webhookSecret: string }>("/v1/webhook-endpoints", {
       method: "POST",
-      headers: merchantHeaders(merchant.apiKey),
+      headers: merchantHeaders(merchantApiKey),
       body: JSON.stringify({ url: `http://127.0.0.1:${String(receiverPort)}/webhooks/paymap` }),
     });
     webhookSecret = webhook.webhookSecret;
@@ -317,7 +340,7 @@ test.describe.serial("Phase 13 — real testnet full chain", () => {
     const nativeAssetContractId = Asset.native().contractId(Networks.TESTNET);
     const product = await apiJson<ProductResponse>("/v1/products", {
       method: "POST",
-      headers: merchantHeaders(merchant.apiKey),
+      headers: merchantHeaders(merchantApiKey),
       body: JSON.stringify({
         name: "Live Testnet Plan",
         description: "Ephemeral Phase 13 system test",
@@ -335,7 +358,7 @@ test.describe.serial("Phase 13 — real testnet full chain", () => {
     const checkout = await apiJson<CheckoutSessionResponse>("/v1/checkout-sessions", {
       method: "POST",
       headers: merchantHeaders(
-        merchant.apiKey,
+        merchantApiKey,
         `phase13-checkout-${randomBytes(8).toString("hex")}`,
       ),
       body: JSON.stringify({ productId: product.id, clientReference: "phase13-live-testnet" }),
@@ -362,6 +385,10 @@ test.describe.serial("Phase 13 — real testnet full chain", () => {
           prisma.product.deleteMany({ where: { merchantId: fixtureMerchantId } }),
           prisma.idempotencyKey.deleteMany({ where: { merchantId: fixtureMerchantId } }),
           prisma.apiKey.deleteMany({ where: { merchantId: fixtureMerchantId } }),
+          prisma.merchantSession.deleteMany({ where: { merchantId: fixtureMerchantId } }),
+          prisma.merchantAuthChallenge.deleteMany({
+            where: { walletAddress: merchantSigner.publicKey },
+          }),
           prisma.merchant.deleteMany({ where: { id: fixtureMerchantId } }),
         ])
         .catch(() => undefined);

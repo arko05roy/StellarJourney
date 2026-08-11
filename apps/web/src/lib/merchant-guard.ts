@@ -5,13 +5,13 @@
  */
 import "server-only";
 import { redirect } from "next/navigation";
-import { getMerchantApiKey } from "./merchant-session";
+import { getMerchantSessionToken } from "./merchant-session";
 
-/** Returns the raw API key, or redirects to `/merchant/connect` if none is stored. Never returns `undefined` — callers can treat the result as a real key. */
-export async function requireMerchantApiKey(): Promise<string> {
-  const apiKey = await getMerchantApiKey();
-  if (apiKey === undefined) {
+/** Returns the opaque dashboard session token, or redirects to wallet sign-in. */
+export async function requireMerchantSession(): Promise<string> {
+  const sessionToken = await getMerchantSessionToken();
+  if (sessionToken === undefined) {
     redirect("/merchant/connect");
   }
-  return apiKey;
+  return sessionToken;
 }

@@ -29,6 +29,7 @@ declare module "fastify" {
     prisma: PrismaClient;
     mandateReader: MandateReader;
     hashSecret: string;
+    merchantAuthDomain: string;
     now: () => Date;
     webhookEncryptionKey: string;
     authorizationEncryptionKey: string;
@@ -49,6 +50,7 @@ export interface BuildAppOptions {
   prisma: PrismaClient;
   mandateReader: MandateReader;
   hashSecret: string;
+  merchantAuthDomain: string;
   webhookEncryptionKey: string;
   authorizationEncryptionKey: string;
   chargeAuthorization: {
@@ -75,6 +77,10 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
               "req.headers.cookie",
               "apiKey",
               "*.apiKey",
+              "sessionToken",
+              "*.sessionToken",
+              "signature",
+              "*.signature",
               "secret",
               "*.secret",
               "webhookSecret",
@@ -93,6 +99,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.decorate("prisma", options.prisma);
   app.decorate("mandateReader", options.mandateReader);
   app.decorate("hashSecret", options.hashSecret);
+  app.decorate("merchantAuthDomain", options.merchantAuthDomain);
   app.decorate("now", options.now ?? (() => new Date()));
   app.decorate("webhookEncryptionKey", options.webhookEncryptionKey);
   app.decorate("authorizationEncryptionKey", options.authorizationEncryptionKey);
@@ -144,8 +151,8 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   // controlled domains, so an allowlist would defeat the point.
   app.register(cors, { origin: true });
 
-  // Generous global default; specific routes (merchant creation, API key
-  // rotation, charge creation — CLAUDE.md §10) override with a stricter
+  // Generous global default; wallet authentication, API-key rotation, and
+  // charge creation override with stricter
   // per-route limit. IP-keyed for every route (including authenticated
   // ones) — simplest correct MVP choice; merchant-scoped limiting is a
   // documented future refinement, not required for Phase 8's scope.
