@@ -74,7 +74,65 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-const server = createServer((req, res) => {
+function readJsonBody(req) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += String(chunk);
+    });
+    req.on("end", () => {
+      try {
+        resolve(raw.length > 0 ? JSON.parse(raw) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Merchant dashboard fixtures (Phase 12b e2e: create product -> generate
+// checkout link -> view mandates -> view a failed collection -> rotate an
+// API key). Deliberately minimal — only the routes that flow actually
+// exercises, matching this file's existing "network-layer stub, not a
+// re-implementation" scope.
+//
+// Keyed by API key in a `Map`, not one shared module-level object:
+// `playwright.config.ts` sets `fullyParallel: true`, and this one mock
+// process is shared by every test in the file (a real webServer, not a
+// per-test fixture) — two tests each calling `POST /v1/merchants` and
+// rotating keys concurrently would otherwise stomp on a single global
+// `merchant` variable and intermittently 401 each other mid-flow (observed
+// directly the first time a second — accessibility — test was added
+// alongside the happy-path test). Each account keeps its own products/
+// checkout-sessions list; rotation re-keys the same account object in the
+// map (new key -> same account, old key removed) rather than mutating a
+// shared singleton.
+// ---------------------------------------------------------------------------
+const merchantAccountsByApiKey = new Map(); // apiKey -> { name, walletAddress, apiKey, products: [], checkoutSessions: [] }
+let merchantAccountSeq = 0;
+let merchantKeySeq = 0;
+
+const E2E_MERCHANT_MANDATE_ID = "9".repeat(64);
+const E2E_MERCHANT_PAYER_ADDRESS = "GATESTMERCHANTFLOWPAYERXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
+/** Returns the authenticated account, or sends a 401 and returns `undefined`. */
+function requireMerchantAuth(req, res) {
+  const header = req.headers.authorization ?? "";
+  const match = /^Bearer\s+(\S+)$/i.exec(header);
+  const account = match ? merchantAccountsByApiKey.get(match[1]) : undefined;
+  if (!account) {
+    send(res, 401, { code: "MISSING_API_KEY", message: "invalid or missing API key" });
+    return undefined;
+  }
+  return account;
+}
+
+function toMerchantProductResponse(product) {
+  return { ...product };
+}
+
+const server = createServer(async (req, res) => {
   // Mirrors apps/api's own permissive CORS for these public endpoints
   // (`app.ts`'s `@fastify/cors` registration) — without this, the browser
   // blocks the checkout page's fetch calls before they ever reach this
@@ -84,7 +142,7 @@ const server = createServer((req, res) => {
     res.writeHead(204, {
       "access-control-allow-origin": "*",
       "access-control-allow-methods": "GET,POST",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type, authorization, idempotency-key",
     });
     res.end();
     return;
@@ -163,6 +221,166 @@ const server = createServer((req, res) => {
           status: "permanently_failed",
           failureCode: "AmountExceedsChargeLimit",
           attemptedAt: new Date(Date.now() - 43_200_000).toISOString(),
+        },
+      ],
+    });
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // Merchant dashboard routes
+  // -------------------------------------------------------------------------
+
+  if (req.method === "POST" && url.pathname === "/v1/merchants") {
+    const body = await readJsonBody(req).catch(() => ({}));
+    merchantAccountSeq += 1;
+    merchantKeySeq += 1;
+    const account = {
+      id: `merchant-e2e-${String(merchantAccountSeq)}`,
+      name: body.name ?? "",
+      walletAddress: body.walletAddress ?? "",
+      apiKey: `pmk_e2e_${String(merchantKeySeq)}`,
+      products: [],
+      checkoutSessions: [],
+      productSeq: 0,
+      sessionSeq: 0,
+    };
+    merchantAccountsByApiKey.set(account.apiKey, account);
+    send(res, 201, {
+      merchantId: account.id,
+      name: account.name,
+      walletAddress: account.walletAddress,
+      apiKeyId: `key-${String(merchantKeySeq)}`,
+      apiKey: account.apiKey,
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/merchants/me/api-keys/rotate") {
+    const account = requireMerchantAuth(req, res);
+    if (!account) return;
+    const oldKeyId = `key-was-${account.apiKey}`;
+    merchantAccountsByApiKey.delete(account.apiKey);
+    merchantKeySeq += 1;
+    account.apiKey = `pmk_e2e_${String(merchantKeySeq)}`;
+    merchantAccountsByApiKey.set(account.apiKey, account);
+    send(res, 201, { apiKeyId: `key-${String(merchantKeySeq)}`, apiKey: account.apiKey, revokedApiKeyId: oldKeyId });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/webhook-endpoints") {
+    if (!requireMerchantAuth(req, res)) return;
+    send(res, 200, { configured: false });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/products") {
+    const account = requireMerchantAuth(req, res);
+    if (!account) return;
+    send(res, 200, { data: account.products.map(toMerchantProductResponse) });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/products") {
+    const account = requireMerchantAuth(req, res);
+    if (!account) return;
+    const body = await readJsonBody(req).catch(() => ({}));
+    account.productSeq += 1;
+    const product = {
+      id: `e2e-product-${account.id}-${String(account.productSeq)}`,
+      name: body.name,
+      description: body.description,
+      assetAddress: body.assetAddress,
+      assetDecimals: body.assetDecimals,
+      amountType: body.amountType,
+      fixedAmount: body.amountType === "fixed" ? body.fixedAmount : undefined,
+      maxPerCharge: body.amountType === "variable" ? body.maxPerCharge : undefined,
+      maxPerPeriod: body.maxPerPeriod,
+      periodSeconds: body.periodSeconds,
+      minIntervalSeconds: body.minIntervalSeconds,
+      maxSuccessfulCharges: body.maxSuccessfulCharges,
+      defaultDurationSeconds: body.defaultDurationSeconds,
+      active: true,
+      createdAt: new Date().toISOString(),
+    };
+    account.products.unshift(product);
+    send(res, 201, toMerchantProductResponse(product));
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/checkout-sessions") {
+    const account = requireMerchantAuth(req, res);
+    if (!account) return;
+    send(res, 200, { data: account.checkoutSessions });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/checkout-sessions") {
+    const account = requireMerchantAuth(req, res);
+    if (!account) return;
+    const body = await readJsonBody(req).catch(() => ({}));
+    account.sessionSeq += 1;
+    const session = {
+      id: `e2e-merchant-session-${account.id}-${String(account.sessionSeq)}`,
+      merchantId: account.id,
+      productId: body.productId,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    };
+    account.checkoutSessions.unshift(session);
+    send(res, 201, session);
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/mandates") {
+    const account = requireMerchantAuth(req, res);
+    if (!account) return;
+    send(res, 200, {
+      data: [
+        {
+          live: true,
+          mandateId: E2E_MERCHANT_MANDATE_ID,
+          mandate: {
+            id: E2E_MERCHANT_MANDATE_ID,
+            payer: E2E_MERCHANT_PAYER_ADDRESS,
+            merchant: account.walletAddress,
+            asset: E2E_ASSET_ADDRESS,
+            status: "Active",
+            amountRule: { kind: "fixed", amountBaseUnits: "150000000" },
+            maxPerPeriodBaseUnits: "150000000",
+            periodSeconds: "2592000",
+            minIntervalSeconds: "86400",
+            startAt: new Date(Date.now() - 86_400_000).toISOString(),
+            expiresAt: new Date(Date.now() + 31_536_000_000).toISOString(),
+            maxSuccessfulCharges: 12,
+            successfulCharges: 1,
+            totalCollectedBaseUnits: "150000000",
+            currentPeriodStart: new Date(Date.now() - 86_400_000).toISOString(),
+            currentPeriodCollectedBaseUnits: "150000000",
+            createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+          },
+        },
+      ],
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/charges") {
+    if (!requireMerchantAuth(req, res)) return;
+    send(res, 200, {
+      data: [
+        {
+          id: "e2e-failed-charge-1",
+          mandateId: E2E_MERCHANT_MANDATE_ID,
+          chargeId: "8".repeat(64),
+          amount: "999.0000000",
+          invoiceHash: "7".repeat(64),
+          scheduledFor: new Date().toISOString(),
+          status: "permanently_failed",
+          attemptCount: 1,
+          failureCode: "AmountExceedsChargeLimit",
+          createdAt: new Date().toISOString(),
         },
       ],
     });

@@ -191,3 +191,64 @@ describe("POST /v1/payments/:id/refunds", () => {
     expect(response.statusCode).toBe(404);
   });
 });
+
+describe("GET /v1/refunds", () => {
+  let testApp: TestApp;
+  let apiKey: string;
+
+  beforeEach(async () => {
+    testApp = buildTestApp();
+    await cleanDatabase(testApp.prisma);
+    apiKey = (await createTestMerchant(testApp.prisma)).apiKey;
+  });
+
+  afterEach(async () => {
+    await testApp.app.close();
+    await testApp.prisma.$disconnect();
+  });
+
+  it("requires authentication", async () => {
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/refunds" });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("lists this merchant's refund requests, newest first, with the decimal amount", async () => {
+    const { paymentId } = await createProductAndPaymentFixture(testApp, apiKey, "100.00");
+    await testApp.app.inject({
+      method: "POST",
+      url: `/v1/payments/${paymentId}/refunds`,
+      headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
+      payload: { amount: "40.00" },
+    });
+
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/refunds", headers: authHeader(apiKey) });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { data: { paymentId: string; amount: string; status: string }[] };
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0]?.paymentId).toBe(paymentId);
+    expect(body.data[0]?.amount).toBe("40.0000000");
+    expect(body.data[0]?.status).toBe("scheduled");
+  });
+
+  it("filters by paymentId", async () => {
+    const first = await createProductAndPaymentFixture(testApp, apiKey, "100.00");
+    const second = await createProductAndPaymentFixture(testApp, apiKey, "50.00");
+    await testApp.app.inject({
+      method: "POST",
+      url: `/v1/payments/${first.paymentId}/refunds`,
+      headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
+      payload: { amount: "10.00" },
+    });
+    await testApp.app.inject({
+      method: "POST",
+      url: `/v1/payments/${second.paymentId}/refunds`,
+      headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
+      payload: { amount: "5.00" },
+    });
+
+    const response = await testApp.app.inject({ method: "GET", url: `/v1/refunds?paymentId=${first.paymentId}`, headers: authHeader(apiKey) });
+    const body = response.json() as { data: { paymentId: string }[] };
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0]?.paymentId).toBe(first.paymentId);
+  });
+});

@@ -585,3 +585,45 @@
   separate `decryptWebhookSecret(encrypted, key) === secret` assertion is
   the right pair of checks; asserting only the second one would still pass
   even if encryption were accidentally a no-op wrapper.
+- A Next.js Server Action that mutates a cookie (`cookies().set(...)`) and a
+  Server Component page that redirects based on that same cookie's presence
+  cannot coexist on the page the action was submitted from: Next.js
+  re-renders the current route's Server Components as part of the *same*
+  action response once a cookie changes, so a `redirect()` guarded on
+  "cookie now present" fires before the client ever sees the action's own
+  returned state — a "create account, then show the new secret exactly
+  once on this same page" flow silently never shows the secret, jumping
+  straight to the redirect target instead. No error, no warning — just a
+  race the first real end-to-end (Playwright) run caught, not typecheck or
+  unit tests (those never rendered the full page tree through a real
+  Server Action round trip). Fix: the one page a "mutate a cookie and keep
+  rendering here" action targets must not redirect on cookie presence at
+  all; every *other* page's normal "redirect if not connected" guard is
+  unaffected and can stay as strict as before.
+- `e2e/fixtures/mock-api-server.mjs`-style Node mock servers used by
+  Playwright's `webServer` config are one shared process for the *entire*
+  spec file when `fullyParallel: true` (the default in this repo's
+  `playwright.config.ts`) — module-level mutable state shaped like a
+  single object (`let merchant = {...}`) works fine for one test but
+  produces real, intermittent cross-test 401s the moment a second test
+  that also creates/rotates a "session" runs concurrently in another
+  worker (observed directly: one test's API-key rotation invalidated
+  another concurrently-running test's still-in-flight request). Keyed
+  state (`Map<sessionKeyOrId, account>`) fixes it outright and costs
+  nothing — model it that way from the first test onward in any mock
+  server more than one spec file's test will ever exercise, rather than
+  discovering the race only after adding a second test.
+- `StrKey.isValidContract`/`isValidEd25519PublicKey` (from
+  `@stellar/stellar-sdk`) genuinely checksum-validate — a hand-typed
+  placeholder like `"C" + "A".repeat(55)` or `` `C${"A".repeat(55)}` ``
+  (56 chars, right prefix) reliably fails validation despite looking
+  plausible. Any test or fixture that needs a Zod schema built on these
+  checks (e.g. `StellarContractAddressSchema`) to actually pass — not just
+  a plain string field nothing validates — needs a real encoded value:
+  `StrKey.encodeContract(Buffer.alloc(32, <any byte>))` (Node) or the
+  browser-safe equivalent. Existing E2E fixture constants using the
+  fake-looking form work fine *only* where nothing actually runs
+  `StrKey.isValid*` against them (e.g. a field just echoed back by a mock
+  server, never client-side-validated) — don't copy that pattern into a
+  form whose client-side validation (this repo's `validateProductForm`,
+  for one) genuinely checksum-checks the address before allowing submit.

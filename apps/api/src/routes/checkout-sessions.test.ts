@@ -357,3 +357,69 @@ describe("POST /v1/checkout-sessions/:id/mandate", () => {
     expect(response.json().code).toBe("MANDATE_PAYER_MISMATCH");
   });
 });
+
+describe("GET /v1/checkout-sessions", () => {
+  let testApp: TestApp;
+  let apiKey: string;
+  let productId: string;
+
+  beforeEach(async () => {
+    testApp = buildTestApp();
+    await cleanDatabase(testApp.prisma);
+    apiKey = (await createTestMerchant(testApp.prisma)).apiKey;
+    productId = await createProduct(testApp.app, apiKey);
+  });
+
+  afterEach(async () => {
+    await testApp.app.close();
+    await testApp.prisma.$disconnect();
+  });
+
+  it("requires authentication", async () => {
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/checkout-sessions" });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("lists this merchant's checkout sessions, newest first — backs the 'Checkout links' view", async () => {
+    await testApp.app.inject({
+      method: "POST",
+      url: "/v1/checkout-sessions",
+      headers: { ...authHeader(apiKey), "idempotency-key": "cs-list-1" },
+      payload: { productId },
+    });
+    await testApp.app.inject({
+      method: "POST",
+      url: "/v1/checkout-sessions",
+      headers: { ...authHeader(apiKey), "idempotency-key": "cs-list-2" },
+      payload: { productId },
+    });
+
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/checkout-sessions", headers: authHeader(apiKey) });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { data: { id: string; productId: string }[] };
+    expect(body.data).toHaveLength(2);
+    expect(body.data.every((s) => s.productId === productId)).toBe(true);
+  });
+
+  it("filters by productId and never returns another merchant's sessions", async () => {
+    await testApp.app.inject({
+      method: "POST",
+      url: "/v1/checkout-sessions",
+      headers: { ...authHeader(apiKey), "idempotency-key": "cs-filter-1" },
+      payload: { productId },
+    });
+    const otherApiKey = (await createTestMerchant(testApp.prisma)).apiKey;
+    const otherProductId = await createProduct(testApp.app, otherApiKey);
+    await testApp.app.inject({
+      method: "POST",
+      url: "/v1/checkout-sessions",
+      headers: { ...authHeader(otherApiKey), "idempotency-key": "cs-filter-2" },
+      payload: { productId: otherProductId },
+    });
+
+    const response = await testApp.app.inject({ method: "GET", url: `/v1/checkout-sessions?productId=${productId}`, headers: authHeader(apiKey) });
+    const body = response.json() as { data: { productId: string }[] };
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0]?.productId).toBe(productId);
+  });
+});

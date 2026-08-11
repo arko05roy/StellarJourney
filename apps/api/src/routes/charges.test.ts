@@ -210,3 +210,66 @@ describe("POST /v1/mandates/:id/charges", () => {
     expect(count).toBe(1);
   });
 });
+
+describe("GET /v1/charges", () => {
+  let testApp: TestApp;
+  let apiKey: string;
+  let walletAddress: string;
+
+  beforeEach(async () => {
+    testApp = buildTestApp();
+    await cleanDatabase(testApp.prisma);
+    const merchant = await createTestMerchant(testApp.prisma);
+    apiKey = merchant.apiKey;
+    walletAddress = merchant.walletAddress;
+  });
+
+  afterEach(async () => {
+    await testApp.app.close();
+    await testApp.prisma.$disconnect();
+  });
+
+  it("requires authentication", async () => {
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/charges" });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("filters by a comma-separated status list — backs the 'Failed collections' view", async () => {
+    const mandate = buildMandate({ merchant: walletAddress, status: "Active", startAt: 0n });
+    testApp.mandateReader.setMandate(mandate);
+    await linkMandateToProduct(testApp, apiKey, mandate);
+
+    const scheduled = await testApp.app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandate.id}/charges`,
+      headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
+      payload: { amount: "100.00", invoiceHash: randomHexId32() },
+    });
+    const { id: scheduledId } = scheduled.json() as { id: string };
+    const failed = await testApp.app.inject({
+      method: "POST",
+      url: `/v1/mandates/${mandate.id}/charges`,
+      headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
+      payload: { amount: "100.00", invoiceHash: randomHexId32() },
+    });
+    const { id: failedId } = failed.json() as { id: string };
+    await testApp.prisma.chargeRequest.update({ where: { id: failedId }, data: { status: "permanently_failed", failureCode: "InsufficientBalance" } });
+
+    const response = await testApp.app.inject({
+      method: "GET",
+      url: "/v1/charges?status=permanently_failed,retryable_failed",
+      headers: authHeader(apiKey),
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { data: { id: string; status: string; failureCode?: string }[] };
+    expect(body.data.map((c) => c.id)).toEqual([failedId]);
+    expect(body.data[0]?.failureCode).toBe("InsufficientBalance");
+    expect(body.data.map((c) => c.id)).not.toContain(scheduledId);
+  });
+
+  it("rejects an unknown status value rather than silently ignoring it", async () => {
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/charges?status=not_a_real_status", headers: authHeader(apiKey) });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe("INVALID_STATUS_FILTER");
+  });
+});

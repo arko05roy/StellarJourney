@@ -5,19 +5,34 @@ consumer wallet authorization and mandate creation, a scheduled charge executed 
 over-limit charge rejection, immediate revocation, and a subsequently rejected charge attempt —
 each step with the exact command or UI action to reproduce it on a clean machine.
 
-Status: Scenes 1-2 and 5 are reproducible today (Phase 8 merchant API, Phase 10 consumer checkout,
-Phase 11 consumer dashboard). Scenes 3-4 still need Phase 12 (merchant-facing charge/failed-collection
-UI) before they have a UI; the underlying charge/relayer/revocation mechanics they narrate are
-already proven end-to-end on real testnet (`scripts/run-relayer-testnet-demo.ts`,
-`docs/architecture.md`'s Phase 9 section) — only the merchant dashboard around them is still
-stubbed. Full polish pass is Phase 15.
+Status: Scenes 1, 2, 4 (viewing), and 5 are reproducible today via UI (Phase 8 merchant API,
+Phase 10 consumer checkout, Phase 11 consumer dashboard, Phase 12b merchant dashboard). Scene 1 can
+now be run entirely from `/merchant` (Phase 12b) instead of `curl`; Scene 4's rejection is now
+*viewable* on the merchant dashboard's **Failed** view with its human-readable reason, though
+*requesting* a charge (both scenes 3 and 4's trigger) is still a direct API/SDK call — PLAN.md
+§16.3's dashboard scope is Products/Checkout links/Mandates/Collections/Payments/Refunds/
+Developers/Webhooks, not a "request a charge" button (that belongs to the merchant's own backend
+integration via `@paymap/sdk`, per PLAN.md §17). The underlying charge/relayer/revocation
+mechanics both scenes narrate are already proven end-to-end on real testnet
+(`scripts/run-relayer-testnet-demo.ts`, `docs/architecture.md`'s Phase 9 section). Full polish pass
+is Phase 15.
 
 ---
 
 ## Scene 1 — Merchant setup
 
-Create a merchant, then a product matching the pitch example (`$20`/30 days, capped, 12-month
-mandate lifetime):
+### Via the dashboard (Phase 12b, preferred for the live demo)
+
+1. Open `/merchant/connect` (`apps/web`). Fill in **"New to Paymap"** with a business name and the
+   merchant's Stellar wallet address, submit — the API key is shown exactly once; copy it (CLAUDE.md
+   §10 — it cannot be shown again, though the session itself stays connected via an httpOnly cookie).
+2. **Products -> New product.** Fill in the pitch example: variable up to `$20`, `2592000`-second
+   (30-day) period, `20.00` max per period, `0` minimum interval, unlimited charge count, `31536000`
+   second (12-month) mandate lifetime. Submit — every term here becomes part of the mandate the payer
+   authorizes, nothing adjustable later.
+3. **Checkout links.** Select the new product, click **Generate checkout link**, then **Copy link**.
+
+### Via curl (equivalent, scriptable)
 
 ```bash
 curl -s -X POST http://localhost:3001/v1/merchants \
@@ -78,8 +93,10 @@ mandate they can't find their way back to.
 
 ## Scene 3 — Successful collection
 
-*(Mechanics proven end-to-end on testnet in Phase 9 — `scripts/run-relayer-testnet-demo.ts`;
-merchant-facing "request a charge" UI lands in Phase 12.)*
+*(Mechanics proven end-to-end on testnet in Phase 9 — `scripts/run-relayer-testnet-demo.ts`.
+Requesting the charge itself is a `POST /v1/mandates/:id/charges` call — via `@paymap/sdk` or curl,
+not a merchant dashboard button, per PLAN.md §16.3's scope. The result is viewable afterward on the
+dashboard's **Payments** view, Phase 12b.)*
 
 The merchant requests a $14.50 charge; the relayer loads the mandate, simulates, submits (merchant
 authorizes, relayer only pays the fee and never gains spending authority), and the merchant
@@ -88,7 +105,10 @@ receives exactly $14.50 PUSD.
 ## Scene 4 — Policy protection
 
 *(Contract-level rejection proven by `contracts/mandate-registry`'s `AmountExceedsChargeLimit`/
-`AmountExceedsPeriodLimit` test suite; merchant-facing "failed collection" UI lands in Phase 12.)*
+`AmountExceedsPeriodLimit` test suite. Requesting the charge is the same API/SDK call as Scene 3;
+the rejection is now viewable on the merchant dashboard's **Failed** view, Phase 12b — framed
+honestly as the mandate's own rules correctly blocking the charge, not a bug, with the machine
+code shown alongside for support.)*
 
 The merchant attempts to charge $25 against the $20 mandate; the contract rejects it before any
 token transfer.

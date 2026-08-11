@@ -1,6 +1,7 @@
 # Merchant API
 
-Phase 8 (core endpoints), extended in Phase 12a (webhook registration + delivery, `@paymap/sdk`).
+Phase 8 (core endpoints), extended in Phase 12a (webhook registration + delivery, `@paymap/sdk`)
+and Phase 12b (the merchant dashboard's list endpoints, `apps/web`'s `/merchant/**`).
 Base URL (local): `http://localhost:3001`. All endpoints are versioned under `/v1`.
 
 The contract is the policy authority (CLAUDE.md §1). This API is a workflow layer around it: it
@@ -10,13 +11,19 @@ confirmed on-chain result.
 
 ## Scope note: endpoints beyond PLAN.md §14's literal list
 
-PLAN.md §14 lists ten endpoints. Four more exist and are documented here:
+PLAN.md §14 lists ten endpoints. Ten more exist and are documented here:
 
 ```text
 POST   /v1/merchants                       (bootstrap: create a merchant + first API key)
 POST   /v1/merchants/me/api-keys/rotate    (rotate: issue a new key, revoke the old one)
 POST   /v1/webhook-endpoints               (Phase 12a: register/rotate the real delivery URL + secret)
 GET    /v1/webhook-endpoints               (Phase 12a: status read, never the secret)
+GET    /v1/products                        (Phase 12b: merchant's product catalog, for the dashboard)
+GET    /v1/checkout-sessions               (Phase 12b: merchant's checkout-link history)
+GET    /v1/mandates                        (Phase 12b: merchant's mandate list, live on-chain per row)
+GET    /v1/charges                         (Phase 12b: merchant's charge-request list, filterable by status)
+GET    /v1/refunds                         (Phase 12b: merchant's refund-request list)
+GET    /v1/webhook-deliveries              (Phase 12b: merchant's webhook delivery history)
 ```
 
 The first two exist because CLAUDE.md §10 explicitly requires API-key **issuance** and
@@ -24,7 +31,12 @@ The first two exist because CLAUDE.md §10 explicitly requires API-key **issuanc
 without *some* endpoint. The webhook-endpoints pair exists because real signed delivery
 (CLAUDE.md §12) needs somewhere to register a URL and secret — `PLAN.md §14`'s
 `POST /v1/webhook-endpoints/test` alone only ever validated a candidate URL, it never persisted
-one. Everything else matches PLAN.md §14 exactly.
+one. The six Phase 12b `GET .../` list endpoints exist because PLAN.md §14 only ever specifies
+single-resource reads (`GET /v1/mandates/:id`, `GET /v1/charges/:id`) or a payments list scoped by
+`mandateId` — none of that is enough to render PLAN.md §16.3's merchant dashboard views (Products,
+Checkout links, Active mandates, Upcoming/Failed collections, Refunds, Webhooks), which need a
+merchant-scoped *list* of each resource. Each one mirrors an existing single-resource read's
+auth/ownership rules exactly, just without the `:id`. Everything else matches PLAN.md §14 exactly.
 
 ## Authentication
 
@@ -228,6 +240,13 @@ convention).
 
 → `200` with the same shape, or `404 PRODUCT_NOT_FOUND`.
 
+### `GET /v1/products` (Phase 12b)
+
+Merchant-scoped product catalog, newest first. Query params: `limit` (default 50, max 100).
+
+→ `200` `{ "data": [ { "id": "…", "name": "…", … } ] }` (same product shape as the two endpoints
+above)
+
 ### `POST /v1/checkout-sessions`
 
 Requires `Idempotency-Key`.
@@ -247,6 +266,13 @@ Requires `Idempotency-Key`.
 ### `GET /v1/checkout-sessions/:id`
 
 → `200`, or `404 CHECKOUT_SESSION_NOT_FOUND`.
+
+### `GET /v1/checkout-sessions` (Phase 12b)
+
+Merchant-scoped checkout-link history, newest first — backs the dashboard's "Checkout links" view.
+Query params: `productId` (optional filter), `limit` (default 20, max 100).
+
+→ `200` `{ "data": [ { "id": "…", "productId": "…", "status": "pending", … } ] }`
 
 ### `GET /v1/checkout-sessions/:id/public` (Phase 10, unauthenticated)
 
@@ -323,6 +349,27 @@ Reads live on-chain state via `@paymap/contract-client` — never the database. 
 `404 MandateNotFound` if it doesn't exist on-chain, **or** if it exists but belongs to a different
 merchant (never distinguished — no existence leak).
 
+### `GET /v1/mandates` (Phase 12b)
+
+Merchant-scoped mandate list — backs the dashboard's "Active mandates" and "Upcoming collections"
+views. The contract has no "list mandates by merchant" method of its own, so discovery starts from
+the `MandateIndex` cache and every row is then re-read live on-chain, exactly like `GET
+/v1/mandates/:id` — never the DB cache alone. Query params: `limit` (default 25, max 50).
+
+→ `200`
+
+```json
+{
+  "data": [
+    { "live": true, "mandateId": "…", "mandate": { "id": "…", "status": "Active", … } },
+    { "live": false, "mandateId": "…", "cachedStatus": "Active", "lastIndexedAt": "2026-…Z" }
+  ]
+}
+```
+
+A `live: false` row means the on-chain read failed for that one mandate (e.g. transient RPC
+trouble) — it degrades to the last-known cached status rather than failing the whole list.
+
 ### `POST /v1/mandates/:id/charges`
 
 Requires `Idempotency-Key`. Rate-limited (30/min).
@@ -359,6 +406,16 @@ synchronously**. Phase 9's relayer drives it from there.
 
 → `200`, or `404 CHARGE_REQUEST_NOT_FOUND`.
 
+### `GET /v1/charges` (Phase 12b)
+
+Merchant-scoped charge-request list — backs "Upcoming collections" (`scheduled`, not yet due) and
+"Failed collections" (`retryable_failed`/`permanently_failed`) on the dashboard. Query params:
+`mandateId` (optional filter), `status` (optional, comma-separated — e.g.
+`?status=retryable_failed,permanently_failed`; an unrecognized value is rejected with `400
+INVALID_STATUS_FILTER` rather than silently ignored), `limit` (default 50, max 100).
+
+→ `200` `{ "data": [ { "id": "…", "status": "permanently_failed", "failureCode": "AmountExceedsChargeLimit", … } ] }`
+
 ### `GET /v1/payments`
 
 Query params: `mandateId` (optional filter), `limit` (default 20, max 100).
@@ -384,6 +441,13 @@ schedules.
 ```json
 { "id": "…", "paymentId": "…", "refundId": "<64 hex>", "amount": "5.00", "status": "scheduled", "createdAt": "2026-…Z" }
 ```
+
+### `GET /v1/refunds` (Phase 12b)
+
+Merchant-scoped refund-request list — backs the dashboard's "Refunds" view. Query params:
+`paymentId` (optional filter), `limit` (default 20, max 100).
+
+→ `200` `{ "data": [ { "id": "…", "paymentId": "…", "amount": "5.00", "status": "scheduled", … } ] }`
 
 ### `POST /v1/webhook-endpoints` (Phase 12a)
 
@@ -429,6 +493,23 @@ above). If no endpoint is registered yet, the row is still queued but the worker
 
 ```json
 { "id": "…", "eventId": "<64 hex>", "status": "pending", "createdAt": "2026-…Z" }
+```
+
+### `GET /v1/webhook-deliveries` (Phase 12b)
+
+Merchant-scoped delivery history — backs the dashboard's "Webhooks" status/history view. Only
+`status`/`attemptCount`/timestamps are returned, never `payload` or anything secret. Query params:
+`status` (optional, comma-separated, e.g. `?status=dead_letter`; an unrecognized value is rejected
+with `400 INVALID_STATUS_FILTER`), `limit` (default 50, max 100).
+
+→ `200`
+
+```json
+{
+  "data": [
+    { "id": "…", "eventId": "<64 hex>", "eventType": "payment.succeeded", "status": "delivered", "attemptCount": 1, "createdAt": "2026-…Z", "updatedAt": "2026-…Z" }
+  ]
+}
 ```
 
 ## Webhooks (Phase 12a)

@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { HexId32Schema, baseUnitsToDecimalString, decimalToPositiveBaseUnits, MoneyConversionError } from "@paymap/shared";
 import type { Mandate } from "@paymap/contract-client";
 import { badRequest, mandateErrorToApiError, notFoundError } from "../errors.js";
@@ -10,7 +11,16 @@ import { precheckCharge } from "../chain/precheck.js";
 import { MandateReadError } from "../chain/mandate-reader.js";
 import { resolveAssetDecimalsForMandate } from "../services/asset-decimals.js";
 import { randomHexId32 } from "../utils/ids.js";
-import type { ChargeRequest } from "../db.js";
+import { ChargeRequestStatus, type ChargeRequest } from "../db.js";
+
+const CHARGE_REQUEST_STATUS_VALUES: readonly string[] = Object.values(ChargeRequestStatus);
+
+/** Comma-separated status filter (e.g. `?status=retryable_failed,permanently_failed` for the "Failed collections" view, PLAN.md §16.3) — validated against the real enum in the route handler (every value must be a real status, rejected outright otherwise rather than silently ignored). */
+const ListChargesQuerySchema = z.object({
+  mandateId: z.string().optional(),
+  status: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(100).default(50),
+});
 
 function requireIdempotencyKey(request: FastifyRequest): string {
   const header = request.headers["idempotency-key"];
@@ -111,6 +121,41 @@ const chargesRoutes: FastifyPluginAsync = async (app) => {
       reply.status(outcome.status).header("Idempotency-Replayed", String(outcome.replayed)).send(outcome.body);
     },
   );
+
+  /** Merchant-scoped charge-request list, optionally filtered by status/mandate — backs "Upcoming collections" (scheduled, not yet due) and "Failed collections" (retryable_failed/permanently_failed) on the dashboard (PLAN.md §16.3). */
+  app.get("/charges", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
+    const { merchant } = requireMerchantContext(request);
+    const query = ListChargesQuerySchema.parse(request.query);
+
+    let statusIn: string[] | undefined;
+    if (query.status !== undefined) {
+      statusIn = query.status.split(",").map((s) => s.trim());
+      for (const value of statusIn) {
+        if (!CHARGE_REQUEST_STATUS_VALUES.includes(value)) {
+          throw badRequest("INVALID_STATUS_FILTER", `"${value}" is not a valid charge status.`);
+        }
+      }
+    }
+
+    const chargeRequests = await app.prisma.chargeRequest.findMany({
+      where: {
+        merchantId: merchant.id,
+        ...(query.mandateId ? { mandateId: query.mandateId } : {}),
+        ...(statusIn ? { status: { in: statusIn as ChargeRequest["status"][] } } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: query.limit,
+    });
+
+    const withDecimals = await Promise.all(
+      chargeRequests.map(async (chargeRequest) => {
+        const decimals = await resolveAssetDecimalsForMandate(app.prisma, merchant.id, chargeRequest.mandateId).catch(() => 7);
+        return toChargeRequestResponse(chargeRequest, decimals);
+      }),
+    );
+
+    reply.status(200).send({ data: withDecimals });
+  });
 
   app.get("/charges/:id", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
     const { merchant } = requireMerchantContext(request);

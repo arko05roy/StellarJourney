@@ -188,3 +188,73 @@ describe("GET /v1/webhook-endpoints", () => {
     expect(JSON.stringify(after.json())).not.toContain("whsec_");
   });
 });
+
+describe("GET /v1/webhook-deliveries", () => {
+  let testApp: TestApp;
+  let apiKey: string;
+  let merchantId: string;
+
+  beforeEach(async () => {
+    testApp = buildTestApp();
+    await cleanDatabase(testApp.prisma);
+    const merchant = await createTestMerchant(testApp.prisma);
+    apiKey = merchant.apiKey;
+    merchantId = merchant.merchantId;
+  });
+
+  afterEach(async () => {
+    await testApp.app.close();
+    await testApp.prisma.$disconnect();
+  });
+
+  it("requires authentication", async () => {
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/webhook-deliveries" });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("lists this merchant's deliveries with status/attempt counts, never the payload or a secret", async () => {
+    await testApp.prisma.webhookDelivery.create({
+      data: { merchantId, eventId: "evt_1", eventType: "payment.succeeded", payload: { paymentId: "abc" }, status: "delivered", attemptCount: 1 },
+    });
+    await testApp.prisma.webhookDelivery.create({
+      data: { merchantId, eventId: "evt_2", eventType: "payment.failed", payload: { paymentId: "def" }, status: "retry_scheduled", attemptCount: 2 },
+    });
+
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/webhook-deliveries", headers: authHeader(apiKey) });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { data: { eventId: string; status: string; attemptCount: number }[] };
+    expect(body.data).toHaveLength(2);
+    expect(body.data.map((d) => d.eventId)).toEqual(["evt_2", "evt_1"]);
+    expect(JSON.stringify(body)).not.toContain("abc");
+    expect(JSON.stringify(body)).not.toContain("whsec_");
+  });
+
+  it("filters by a comma-separated status list", async () => {
+    await testApp.prisma.webhookDelivery.create({
+      data: { merchantId, eventId: "evt_a", eventType: "payment.succeeded", payload: {}, status: "delivered" },
+    });
+    await testApp.prisma.webhookDelivery.create({
+      data: { merchantId, eventId: "evt_b", eventType: "payment.failed", payload: {}, status: "dead_letter" },
+    });
+
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/webhook-deliveries?status=dead_letter", headers: authHeader(apiKey) });
+    const body = response.json() as { data: { eventId: string }[] };
+    expect(body.data).toHaveLength(1);
+    expect(body.data[0]?.eventId).toBe("evt_b");
+  });
+
+  it("rejects an unknown status value", async () => {
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/webhook-deliveries?status=bogus", headers: authHeader(apiKey) });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().code).toBe("INVALID_STATUS_FILTER");
+  });
+
+  it("never returns another merchant's deliveries", async () => {
+    const other = await createTestMerchant(testApp.prisma);
+    await testApp.prisma.webhookDelivery.create({
+      data: { merchantId: other.merchantId, eventId: "evt_other", eventType: "payment.succeeded", payload: {}, status: "delivered" },
+    });
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/webhook-deliveries", headers: authHeader(apiKey) });
+    expect((response.json() as { data: unknown[] }).data).toHaveLength(0);
+  });
+});

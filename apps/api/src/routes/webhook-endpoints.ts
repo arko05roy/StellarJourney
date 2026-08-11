@@ -11,11 +11,33 @@
  * 12a's `apps/relayer` delivery worker) possible at all.
  */
 import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
 import { assertSafeWebhookUrl, encryptWebhookSecret, generateWebhookSecret, UnsafeWebhookUrlError, type HostResolver } from "@paymap/shared";
 import { badRequest } from "../errors.js";
 import { createAuthPreHandler, requireMerchantContext } from "../auth/plugin.js";
 import { RegisterWebhookEndpointSchema, WebhookEndpointTestSchema, type WebhookEventEnvelope } from "../schemas/webhooks.js";
 import { randomHexId32 } from "../utils/ids.js";
+import { WebhookDeliveryStatus, type WebhookDelivery } from "../db.js";
+
+const WEBHOOK_DELIVERY_STATUS_VALUES: readonly string[] = Object.values(WebhookDeliveryStatus);
+
+const ListWebhookDeliveriesQuerySchema = z.object({
+  status: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(100).default(50),
+});
+
+function toWebhookDeliveryResponse(delivery: WebhookDelivery) {
+  return {
+    id: delivery.id,
+    eventId: delivery.eventId,
+    eventType: delivery.eventType,
+    status: delivery.status,
+    attemptCount: delivery.attemptCount,
+    nextAttemptAt: delivery.nextAttemptAt?.toISOString() ?? undefined,
+    createdAt: delivery.createdAt.toISOString(),
+    updatedAt: delivery.updatedAt.toISOString(),
+  };
+}
 
 async function guardedWebhookUrl(app: { allowInsecureWebhookHttp: boolean; resolveWebhookHost: HostResolver | undefined }, url: string): Promise<void> {
   try {
@@ -64,6 +86,37 @@ const webhookEndpointsRoutes: FastifyPluginAsync = async (app) => {
       configured: merchant.webhookUrl !== null && merchant.webhookSecret !== null,
       webhookUrl: merchant.webhookUrl ?? undefined,
     });
+  });
+
+  /**
+   * Merchant-scoped delivery history — backs the dashboard's "Webhooks"
+   * status/history view (PLAN.md §16.3, this phase's decision #7). Only
+   * `status`/`attemptCount`/timestamps are returned, never `payload` (kept
+   * minimal and never a place a merchant's own customer data could leak
+   * into this UI unexpectedly) and never anything secret (the encrypted
+   * `webhookSecret` lives only on `Merchant`, never on `WebhookDelivery`).
+   */
+  app.get("/webhook-deliveries", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
+    const { merchant } = requireMerchantContext(request);
+    const query = ListWebhookDeliveriesQuerySchema.parse(request.query);
+
+    let statusIn: string[] | undefined;
+    if (query.status !== undefined) {
+      statusIn = query.status.split(",").map((s) => s.trim());
+      for (const value of statusIn) {
+        if (!WEBHOOK_DELIVERY_STATUS_VALUES.includes(value)) {
+          throw badRequest("INVALID_STATUS_FILTER", `"${value}" is not a valid webhook delivery status.`);
+        }
+      }
+    }
+
+    const deliveries = await app.prisma.webhookDelivery.findMany({
+      where: { merchantId: merchant.id, ...(statusIn ? { status: { in: statusIn as WebhookDelivery["status"][] } } : {}) },
+      orderBy: { createdAt: "desc" },
+      take: query.limit,
+    });
+
+    reply.status(200).send({ data: deliveries.map(toWebhookDeliveryResponse) });
   });
 
   /**

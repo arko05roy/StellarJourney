@@ -50,6 +50,11 @@ const ListPaymentsQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(20),
 });
 
+const ListRefundsQuerySchema = z.object({
+  paymentId: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
 const paymentsRoutes: FastifyPluginAsync = async (app) => {
   app.get("/payments", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
     const { merchant } = requireMerchantContext(request);
@@ -65,6 +70,28 @@ const paymentsRoutes: FastifyPluginAsync = async (app) => {
       payments.map(async (payment) => {
         const decimals = await resolveAssetDecimalsForMandate(app.prisma, merchant.id, payment.mandateId).catch(() => 7);
         return toPaymentResponse(payment, decimals);
+      }),
+    );
+
+    reply.status(200).send({ data: withDecimals });
+  });
+
+  /** Merchant-scoped refund-request list, optionally filtered by payment — backs the dashboard's "Refunds" view (PLAN.md §16.3). */
+  app.get("/refunds", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
+    const { merchant } = requireMerchantContext(request);
+    const query = ListRefundsQuerySchema.parse(request.query);
+
+    const refundRequests = await app.prisma.refundRequest.findMany({
+      where: { merchantId: merchant.id, ...(query.paymentId ? { paymentId: query.paymentId } : {}) },
+      orderBy: { createdAt: "desc" },
+      take: query.limit,
+    });
+
+    const withDecimals = await Promise.all(
+      refundRequests.map(async (refundRequest) => {
+        const payment = await app.prisma.payment.findUnique({ where: { paymentId: refundRequest.paymentId } });
+        const decimals = payment ? await resolveAssetDecimalsForMandate(app.prisma, merchant.id, payment.mandateId).catch(() => 7) : 7;
+        return toRefundRequestResponse(refundRequest, decimals);
       }),
     );
 

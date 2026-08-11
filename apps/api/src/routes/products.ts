@@ -1,9 +1,14 @@
 import type { FastifyPluginAsync } from "fastify";
+import { z } from "zod";
 import { baseUnitsToDecimalString, decimalToPositiveBaseUnits, MoneyConversionError } from "@paymap/shared";
 import { badRequest, notFoundError } from "../errors.js";
 import { createAuthPreHandler, requireMerchantContext } from "../auth/plugin.js";
 import { CreateProductSchema } from "../schemas/products.js";
 import type { Product } from "../db.js";
+
+const ListProductsQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(100).default(50),
+});
 
 export function toProductResponse(product: Product) {
   const decimals = product.assetDecimals;
@@ -68,6 +73,18 @@ const productsRoutes: FastifyPluginAsync = async (app) => {
     });
 
     reply.status(201).send(toProductResponse(product));
+  });
+
+  /** Merchant-scoped product catalog, newest first — backs the dashboard's "Products" list (PLAN.md §16.3). */
+  app.get("/products", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
+    const { merchant } = requireMerchantContext(request);
+    const query = ListProductsQuerySchema.parse(request.query);
+    const products = await app.prisma.product.findMany({
+      where: { merchantId: merchant.id },
+      orderBy: { createdAt: "desc" },
+      take: query.limit,
+    });
+    reply.status(200).send({ data: products.map(toProductResponse) });
   });
 
   app.get("/products/:id", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {

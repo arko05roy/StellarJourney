@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { badRequest, conflictError, notFoundError } from "../errors.js";
 import { createAuthPreHandler, requireMerchantContext } from "../auth/plugin.js";
 import { CreateCheckoutSessionSchema, LinkMandateToCheckoutSessionSchema } from "../schemas/checkout-sessions.js";
@@ -31,7 +32,24 @@ function requireIdempotencyKey(request: FastifyRequest): string {
   return IdempotencyKeyHeaderSchema.parse(value);
 }
 
+const ListCheckoutSessionsQuerySchema = z.object({
+  productId: z.string().optional(),
+  limit: z.coerce.number().int().positive().max(100).default(20),
+});
+
 const checkoutSessionsRoutes: FastifyPluginAsync = async (app) => {
+  /** Merchant-scoped checkout-session list, optionally filtered by product — backs the dashboard's "Checkout links" view (PLAN.md §16.3), most-recently-generated first. */
+  app.get("/checkout-sessions", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
+    const { merchant } = requireMerchantContext(request);
+    const query = ListCheckoutSessionsQuerySchema.parse(request.query);
+    const sessions = await app.prisma.checkoutSession.findMany({
+      where: { merchantId: merchant.id, ...(query.productId ? { productId: query.productId } : {}) },
+      orderBy: { createdAt: "desc" },
+      take: query.limit,
+    });
+    reply.status(200).send({ data: sessions.map(toCheckoutSessionResponse) });
+  });
+
   app.post("/checkout-sessions", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
     const { merchant } = requireMerchantContext(request);
     const idempotencyKey = requireIdempotencyKey(request);

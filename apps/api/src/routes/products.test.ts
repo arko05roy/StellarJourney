@@ -122,6 +122,54 @@ describe("POST /v1/products", () => {
   });
 });
 
+describe("GET /v1/products", () => {
+  let testApp: TestApp;
+  let apiKey: string;
+
+  beforeEach(async () => {
+    testApp = buildTestApp();
+    await cleanDatabase(testApp.prisma);
+    apiKey = (await createTestMerchant(testApp.prisma)).apiKey;
+  });
+
+  afterEach(async () => {
+    await testApp.app.close();
+    await testApp.prisma.$disconnect();
+  });
+
+  it("requires authentication", async () => {
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/products" });
+    expect(response.statusCode).toBe(401);
+  });
+
+  it("lists this merchant's products, newest first, and never another merchant's", async () => {
+    await testApp.app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeader(apiKey),
+      payload: { ...baseFixedProduct, name: "First", assetAddress: randomStellarContractAddress() },
+    });
+    await testApp.app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeader(apiKey),
+      payload: { ...baseFixedProduct, name: "Second", assetAddress: randomStellarContractAddress() },
+    });
+    const otherApiKey = (await createTestMerchant(testApp.prisma)).apiKey;
+    await testApp.app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: authHeader(otherApiKey),
+      payload: { ...baseFixedProduct, name: "Someone else's", assetAddress: randomStellarContractAddress() },
+    });
+
+    const response = await testApp.app.inject({ method: "GET", url: "/v1/products", headers: authHeader(apiKey) });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { data: { name: string }[] };
+    expect(body.data.map((p) => p.name)).toEqual(["Second", "First"]);
+  });
+});
+
 describe("GET /v1/products/:id", () => {
   let testApp: TestApp;
   let apiKey: string;

@@ -423,3 +423,86 @@ together in a test with no real backend or RPC. The stub gateway also seeds a re
 starting allowance (as if Phase 10's checkout `approve` had already run), so
 `e2e/dashboard.spec.ts` exercises the actual allowance-to-zero prompt, not just its already-zero
 skip path.
+
+## Phase 12b — Merchant dashboard (`apps/web`)
+
+The merchant dashboard (PLAN.md §16.3: Products, Checkout links, Active mandates, Upcoming/Failed
+collections, Payments, Refunds, Developers, Webhooks) is architecturally the opposite of Phases
+10-11's consumer checkout/dashboard: those are entirely client-side (browser wallet signs directly
+against Soroban RPC, no secret ever exists), while every merchant view is authenticated with a
+**merchant API key** that must never reach client-side JavaScript (this phase's lead decision #1).
+That constraint drives every layering choice below.
+
+### The API-key boundary: `server-only`, not just convention
+
+`lib/merchant-session.ts` (httpOnly cookie read/write) and `lib/merchant-api.ts` (the typed
+`/v1/*` client) both start with `import "server-only"` — the real npm package that makes `next
+build` fail outright if any `"use client"` file ever imports either module, transitively or not.
+This turns "the key never leaks client-side" from a code-review hope into a build-time guarantee.
+`lib/no-secret-leak.test.ts` adds a second, faster proof: it statically scans every Client
+Component under `app/merchant/**`/`components/merchant/**` for a *value* import (not a type-only
+one, which is erased and harmless — the same distinction `tasks/lessons.md` already documents for
+this repo's other server-only-adjacent barrels) of either module, so a violation is caught by
+`pnpm test` without waiting for a full `next build`.
+
+The key itself lives only in an httpOnly, `sameSite: "lax"` cookie
+(`MERCHANT_API_KEY_COOKIE`) — there is no merchant login system in this MVP (no email/password,
+no OAuth); the API key *is* the identity, exactly as `apps/api`'s own auth already models it. A
+merchant either creates a new account (`POST /v1/merchants`, unauthenticated bootstrap) or pastes
+an existing key back in (`/merchant/connect`'s "Already have an API key" form, which verifies the
+key with a real authenticated call before storing it, so a stale/revoked key fails immediately
+with a clear error rather than silently breaking every later page).
+
+### Server Components read, Server Actions write
+
+Every `app/merchant/**/page.tsx` (except `connect/page.tsx` itself) is an `async` Server Component
+that calls `requireMerchantApiKey()` (`lib/merchant-guard.ts`, redirects to `/merchant/connect` if
+no cookie) and then fetches directly from `lib/merchant-api.ts` — no client-side `fetch` ever
+carries the `Authorization` header. Every mutation (`lib/merchant-actions.ts`) is a `"use server"`
+Server Action following one pattern: read the cookie server-side, validate, call the API, and
+return a discriminated `{ ok: true, ... } | { ok: false, error, fieldErrors? }` result for
+`useActionState` — `redirect()` is only ever called on the success path, *outside* any try/catch
+(Next.js's redirect mechanism throws a special signal that a generic catch would otherwise
+swallow).
+
+### The "show a secret exactly once" pattern, and the bug it exposed
+
+`createMerchantAction`/`rotateApiKeyAction`/`registerWebhookEndpointAction` all set a cookie (or
+persist a secret) *and* need to keep rendering the current page afterward, so the freshly issued
+value can be shown to the merchant exactly once (CLAUDE.md §10) — never a URL, never re-fetchable.
+This surfaced a real bug during development: `connect/page.tsx` originally redirected away the
+instant a session cookie was present, and Next.js re-renders a route's Server Components as part
+of the *same* action response when a Server Action mutates cookies — so `createMerchantAction`'s
+cookie write raced the client past the success view before anyone could ever see the key. Fixed by
+making `/merchant/connect` the one page that never guards on cookie presence (see its own module
+doc); every other page's guard is unaffected since none of them ever need to render a
+just-issued-secret success state.
+
+### Reused, not duplicated, business logic
+
+`lib/merchant-mandate-display.ts`'s `toBigintMandate` converts the API's decimal-string mandate
+response back into the exact `bigint`-typed shape Phase 11's `lib/mandate-status.ts` already
+expects, so "Upcoming collections" and the mandate detail page's period-usage meter reuse
+`computeNextEligibleChargeDate`/`computeEffectivePeriodUsage` verbatim (CLAUDE.md §20) rather than
+re-deriving the same formulas a second time. `components/dashboard/status-badge.tsx` and
+`components/dashboard/empty-state.tsx`/`period-usage-meter.tsx` are reused directly, unchanged,
+from the consumer dashboard.
+
+### List endpoints: a documented, scoped backend addition
+
+PLAN.md §14 only specifies single-resource merchant reads (`GET /v1/mandates/:id`, `GET
+/v1/charges/:id`) plus one payments list. Rendering PLAN.md §16.3's dashboard views needed six new
+merchant-scoped `GET` list endpoints (`/v1/products`, `/v1/checkout-sessions`, `/v1/mandates`,
+`/v1/charges`, `/v1/refunds`, `/v1/webhook-deliveries`) — each mirrors an existing single-resource
+read's auth/ownership rules exactly, documented in `docs/merchant-api.md`'s scope note. `GET
+/v1/mandates` in particular re-reads every listed mandate live on-chain (never the `MandateIndex`
+cache alone, CLAUDE.md §2), degrading a single row to its cached status (`live: false`) rather than
+failing the whole list if one live read fails.
+
+### E2E: a stateful mock, keyed per-account
+
+`e2e/fixtures/mock-api-server.mjs`'s merchant routes keep a `Map<apiKey, account>` rather than one
+shared module-level object — `playwright.config.ts` runs `fullyParallel: true` against one shared
+mock-server process for the whole spec file, and an earlier single-`merchant`-variable version
+produced real cross-test 401s the first time a second (accessibility) merchant test ran
+concurrently with the happy-path test's own API-key rotation step.

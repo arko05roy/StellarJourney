@@ -225,7 +225,7 @@ the full rationale.
 
 ## Phase 12 — Merchant Dashboard + Webhooks + SDK
 
-- [ ] Dashboard: products, checkout links, mandates, upcoming, failed, payments, refunds, developers, webhooks (Phase 12b — not this agent's slice)
+- [x] Dashboard: products, checkout links, mandates, upcoming, failed, payments, refunds, developers, webhooks (Phase 12b — done, see Review)
 - [x] Webhook delivery worker: HMAC SHA-256, timestamp, event id, signature version, retry count header
 - [x] Delivery state machine: pending → delivering → delivered | retry_scheduled → dead_letter
 - [x] Stable event id across retries
@@ -1683,3 +1683,119 @@ BullMQ worker/scheduler loop itself was exercised via direct pipeline-function c
 convention (`pipeline.test.ts` does the same). Phase 12b (merchant dashboard UI, a separate agent)
 will need a way to show webhook delivery status/history to merchants — no UI for that exists yet,
 by design (out of this phase's scope).
+
+### Phase 12b — Merchant Dashboard (done)
+
+**What changed:** the merchant dashboard UI (`apps/web/src/app/merchant/**`,
+`apps/web/src/components/merchant/**`), per PLAN.md §16.3 and this phase's lead decisions. Nine
+nav sections: Products, Checkout links, Mandates, Upcoming, Failed, Payments, Refunds, Developers,
+Webhooks — every one backed by a real endpoint, none a placeholder.
+
+**Architecture (the hard requirement — API key never client-side):** `lib/merchant-session.ts`
+(httpOnly cookie read/write) and `lib/merchant-api.ts` (typed `/v1/*` client) both start with
+`import "server-only"` — a real build-time guarantee, not a convention, that no `"use client"`
+file can ever import either module. `lib/no-secret-leak.test.ts` adds a second, faster static
+proof (14 tests): scans every Client Component under `app/merchant/**`/`components/merchant/**`
+for a *value* import (type-only imports are erased, not a leak) of either module. Every
+`app/merchant/**/page.tsx` is an `async` Server Component (`requireMerchantApiKey()` guard,
+`lib/merchant-guard.ts`) reading the key server-side; every mutation is a `"use server"` Server
+Action (`lib/merchant-actions.ts`) returning a discriminated `{ok:true,...}|{ok:false,error,...}`
+result for `useActionState`. No merchant login system exists (no email/password) — the API key
+itself is the identity, stored in an httpOnly/`sameSite:"lax"` cookie set either by
+`POST /v1/merchants` (bootstrap, new account) or a verified paste of an existing key.
+
+**Real bug found and fixed during development:** `connect/page.tsx` originally redirected away the
+instant a session cookie existed. Next.js re-renders a route's Server Components as part of the
+*same* action response when a Server Action mutates cookies — so `createMerchantAction`'s cookie
+write raced the client past the one-time API-key display before it could ever render. Fixed by
+making `/merchant/connect` the one page that never guards on cookie presence (documented in its
+own module doc) — every other page's guard is unaffected.
+
+**Backend additions (apps/api), flagged and documented, not silent:** PLAN.md §14 only specifies
+single-resource merchant reads; rendering PLAN.md §16.3's dashboard needed six new merchant-scoped
+`GET` list endpoints — `/v1/products`, `/v1/checkout-sessions`, `/v1/mandates`, `/v1/charges`
+(status-filterable), `/v1/refunds`, `/v1/webhook-deliveries` — each mirroring an existing
+single-resource read's auth/ownership rules exactly. `GET /v1/mandates` re-reads every listed
+mandate live on-chain (never the `MandateIndex` cache alone, CLAUDE.md §2), degrading a single row
+to its cached status (`live: false`) rather than failing the whole list if one live read fails.
+Documented in `docs/merchant-api.md`'s scope note, same pattern Phase 8's `merchants.ts` addition
+used. 6 new/updated `apps/api` route files, 60 new backend tests (218 total now, was ~172 before
+counting).
+
+**Reused, not duplicated, business logic (CLAUDE.md §20):** `lib/merchant-mandate-display.ts`'s
+`toBigintMandate` converts the API's decimal-string mandate response back into the exact
+`bigint`-typed shape Phase 11's `lib/mandate-status.ts` already expects, so "Upcoming collections"
+and the mandate detail page's period-usage meter reuse `computeNextEligibleChargeDate`/
+`computeEffectivePeriodUsage` verbatim. `components/dashboard/status-badge.tsx`,
+`empty-state.tsx`, `period-usage-meter.tsx` reused directly, unchanged. `lib/failure-reasons.ts`
+reused for "Failed collections," with an explicit "blocked by mandate rules" vs. "temporary issue"
+badge split so a policy rejection is never confused with an infra hiccup.
+
+**Skills invoked:** `shadcn` (added `table`/`select`/`textarea` via the CLI — confirmed
+`tailwindVersion: "v4"` via `npx shadcn@latest info --json -c apps/web` first, matching the
+existing setup; no new deps needed, all three build on the already-installed `@base-ui/react`) and
+`design-taste-frontend` (took only the cross-cutting bars per the lead's note that it scopes itself
+to landing pages: no AI-purple/glow, one accent color via the existing shadcn tokens, WCAG AA via
+the existing component primitives' built-in focus-visible/contrast styling, real empty/loading/
+error states on every list view, dark mode inherited from the existing theme tokens — did not
+force landing-page-specific rules like hero/marquee/eyebrow guidance onto a data-dense dashboard).
+
+**Deviations / judgment calls (flagged):**
+- No "request a charge" or "submit a refund transaction" UI beyond the refund *request* form —
+  PLAN.md §16.3's dashboard scope is Products/Checkout links/Mandates/Collections/Payments/
+  Refunds/Developers/Webhooks, not charge creation (that's the merchant's own backend integration
+  via `@paymap/sdk`, PLAN.md §17). `docs/demo-script.md` updated to reflect this precisely.
+- No single-payment read endpoint exists on `apps/api` (`GET /v1/payments` is list-only) — the
+  refund page finds its target payment by scanning the merchant's own recent payments list rather
+  than a dedicated `GET /v1/payments/:id`. Correct (never another merchant's payment can match)
+  but not the most efficient possible lookup for a very large payment history; flagged rather than
+  silently adding a seventh new backend endpoint beyond the six already justified above.
+- The webhook "event coverage" table (which of the 8 events actually produce today) is a static
+  constant in `app/merchant/webhooks/page.tsx`, hand-mirrored from `docs/merchant-api.md`'s table
+  rather than fetched from a shared source — there's no backend endpoint for "event producer
+  status" (it's not really data, it's documentation of current wiring), and inventing one just to
+  avoid a hand-mirrored constant would be over-engineering for an MVP.
+- `GET /v1/mandates`'s live-read-per-row approach (`Promise.all`, capped at `limit`, default 25) is
+  the same N+1-live-read pattern already established by `payments.ts`/`charges.ts`'s decimals
+  resolution — consistent with existing convention, not a new architectural pattern, but a real
+  scalability ceiling for a merchant with very many mandates (acceptable for this MVP's scale).
+
+**Tests:** 45 new `apps/web` tests (130 total, was 85) — `merchant-product-form.test.ts` (13, incl.
+over-precision rejection and fixed/variable branching), `merchant-refund-form.test.ts` (8, incl.
+`amount <= remaining refundable` enforcement), `no-secret-leak.test.ts` (14, the security proof),
+`product-form.test.tsx`/`create-merchant-form.test.tsx`/`refund-form.test.tsx` (10 component tests
+using RTL + `userEvent`, mocking `lib/merchant-actions` and verifying `useActionState` + native
+`<form action>` actually invokes the mocked server action in jsdom). Plus 60 new `apps/api` tests
+for the six list endpoints (listed above). New `e2e/merchant.spec.ts` (2 tests): the full flow
+(create account -> create product -> generate checkout link -> view mandate -> view a failed
+collection with its reason -> rotate API key) plus a keyboard/focus-visible accessibility pass.
+`e2e/fixtures/mock-api-server.mjs` extended with merchant routes, keyed by a `Map<apiKey, account>`
+(not one shared object) — an earlier single-`merchant`-variable version produced real cross-test
+401s under Playwright's `fullyParallel: true` the first time a second merchant test ran
+concurrently with the happy-path test's own key-rotation step; caught by running the suite twice,
+not by inspection.
+
+**Commands run (all passed):**
+```
+docker compose up -d
+pnpm install
+pnpm lint                            (16/16 tasks)
+pnpm typecheck                       (16/16 tasks)
+pnpm build                           (10/10 tasks)
+pnpm test                            (16/16 tasks; apps/api 218, apps/web 130, apps/relayer 102,
+                                       packages/* unchanged)
+pnpm test:e2e                        (apps/web: 8/8 Playwright — 6 pre-existing + 2 new merchant,
+                                       run twice to confirm no parallel-worker flakiness)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-token, unchanged)
+```
+
+**Unverified / left for later phases:** no real testnet run of the merchant dashboard against a
+live `apps/api` + Postgres + real Soroban RPC — only the Playwright suite against the mock API and
+the `apps/api` route tests against a real (local) Postgres with a fake `MandateReader`. The 4
+`mandate.*` webhook events still have no producer (Phase 12c, on-chain event indexer — unchanged by
+this phase, correctly reflected as "Not wired yet" in the dashboard's event-coverage table rather
+than silently implied). No pagination UI for any list view (all currently render up to their
+endpoint's `limit` in one page) — acceptable for this MVP's expected scale, flagged for a future
+phase if a merchant's history grows large.
