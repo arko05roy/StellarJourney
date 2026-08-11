@@ -2,6 +2,39 @@
 
 Recurring stablecoin payments with limits enforced by a Soroban contract. Payers authorize a bounded mandate and token allowance; merchants can collect only within the signed amount, time, frequency, and charge-count rules. Payers can pause or revoke immediately.
 
+## Level 5 submission
+
+| Item                        | Evidence                                                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Public repository           | <https://github.com/SachPlayZ/Paymap>                                                                |
+| Live application            | <https://paymap-web.vercel.app>                                                                      |
+| Live API                    | <https://paymap-demo-api.onrender.com/readyz>                                                        |
+| Pitch deck                  | [`docs/level-5/Paymap-Level-5-Pitch-Deck.pptx`](docs/level-5/Paymap-Level-5-Pitch-Deck.pptx)         |
+| Feedback workbook           | [`docs/level-5/Paymap-User-Feedback-Analysis.xlsx`](docs/level-5/Paymap-User-Feedback-Analysis.xlsx) |
+| Google Form specification   | [`docs/level-5/google-form-spec.md`](docs/level-5/google-form-spec.md)                               |
+| Submission evidence tracker | [`docs/level-5/submission-evidence.md`](docs/level-5/submission-evidence.md)                         |
+| Demo walkthrough            | Script ready in [`docs/demo-script.md`](docs/demo-script.md); public video link pending              |
+
+### Testnet activity proof
+
+- [`create_mandate` transaction](https://stellar.expert/explorer/testnet/tx/8e03653aeddaae57aa8f24176f2f5d51c395356fb97b1c8d75e3166ffbefd5d8)
+- [Relayer-submitted `charge` transaction](https://stellar.expert/explorer/testnet/tx/86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c)
+- System E2E evidence and transaction context: [`docs/architecture.md`](docs/architecture.md)
+
+### User feedback and next-phase improvement plan
+
+The current public evidence does **not** claim 50 users. Genuine responses must be collected with the specified Google Form, exported into the workbook, and verified against testnet transactions. Names and emails must be redacted before publication.
+
+After collection:
+
+1. Group onboarding and product feedback by theme.
+2. Rank themes by frequency, severity, and affected user flow.
+3. Implement the highest-impact onboarding or stability issue.
+4. Link the implementation commit and before/after evidence here.
+5. Re-run the same user flow and measure rating, completion, and verified-transaction changes.
+
+The evidence workflow, workbook, deck, and form specification were added in [commit `adf30fd`](https://github.com/SachPlayZ/Paymap/commit/adf30fd). The first feedback-driven product commit remains pending real responses; it will be linked here rather than invented.
+
 ## Deployed testnet contract
 
 | Item                   | Value                                                              |

@@ -2162,3 +2162,60 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 #### Follow-ups
 
 - Configure alert email later, per product decision.
+
+---
+
+## Phase 17 — Level 5 Submission
+
+### Plan
+
+- [x] Audit public repo, commit count, deployment, transaction evidence, and missing submission items.
+- [x] Create a professional pitch deck covering problem, solution, market, architecture, growth,
+      roadmap, and demo.
+- [x] Create an Excel feedback-analysis workbook for real Google Form exports; do not fabricate users
+      or responses.
+- [x] Add onboarding/feedback form specification and evidence collection instructions.
+- [x] Update README with live app, pitch deck, workbook, feedback iteration plan, commit links,
+      transaction proof, demo-video placeholder, and Level 5 checklist.
+- [x] Verify deck visuals, workbook formulas/layout, README links, repository gates, and clean diff.
+
+### Verification
+
+- [x] Repository public and 20+ meaningful commits
+- [x] Deck renders without overflow or overlap
+- [x] Workbook has no formula errors and all sheets render legibly
+- [x] README links resolve locally
+- [x] `pnpm exec prettier --check README.md docs/level-5/*.md tasks/todo.md`
+- [x] `git diff --check`
+
+### Review
+
+#### Changed
+
+- Added a nine-slide editable Level 5 pitch deck with presenter notes and source links.
+- Added a formula-backed Excel workbook for genuine Google Form exports, including validation,
+  duplicate-wallet highlighting, readiness gates, and a rating chart.
+- Added the exact Google Form specification, privacy/export rules, evidence tracker, and README
+  submission section.
+
+#### Verified
+
+- Public repository; 20+ commits before this phase and 21 after the artifact commit.
+- Deck rendered to nine slide images, visually inspected as a contact sheet, and passed
+  `slides_test.py`.
+- All three workbook sheets rendered; formula inspection contained no spreadsheet errors.
+- Frontend returned HTTP 200; Render API `/readyz` responded after the free-tier cold start.
+- Prettier and `git diff --check` passed.
+
+#### Risks
+
+- Level 5 is not honestly complete until 50 genuine users, verified per-user testnet activity, a
+  published demo video, analytics screenshots, and a product commit based on observed feedback exist.
+- The empty workbook is a collection/analysis tool, not user-growth proof.
+
+#### Follow-ups
+
+- Create the Google Form from the committed specification and collect the real cohort.
+- Paste or import the genuine export, verify transactions, and publish only redacted/aggregate proof.
+- Record/upload the walkthrough, implement the highest-impact observed issue, and add both links to
+  README.
