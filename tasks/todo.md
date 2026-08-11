@@ -2349,3 +2349,64 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 #### Follow-ups
 
 - None.
+
+---
+
+## Phase 20 - Testnet Transaction Stress Run
+
+### Plan
+
+- [x] Validate the deployed testnet contract, asset, RPC, Horizon, and live API.
+- [x] Add a bounded CLI-driven stress runner using fresh payer and merchant accounts.
+- [x] Fund 12 accounts, establish PUSD trustlines/balances/allowances, and create 7 mandates.
+- [x] Execute 7 merchant-authorized charges through the production API and relayer.
+- [x] Verify about 52 unique testnet transaction hashes and all final charge/mandate states.
+- [x] Save a public evidence report containing addresses, hashes, timings, and failures only.
+
+### Verification
+
+- [x] Script lint and typecheck
+- [x] 12 distinct funded Stellar addresses
+- [x] About 52 successful, unique testnet transactions
+- [x] 7 relayed charges succeed on-chain
+- [x] Evidence report contains no secret keys or session credentials
+- [x] `git diff --check`
+
+### Files likely touched
+
+- `scripts/stress-test-testnet.ts`
+- `scripts/package.json`
+- `docs/level-5/evidence/testnet-stress-*.json`
+- `tasks/todo.md`
+
+### Questions
+
+- [x] Scope: controlled Stellar testnet only; activity is stress-test evidence, not real-user proof.
+
+### Review
+
+#### Changed
+
+- Added a reusable opt-in testnet stress runner with isolated temporary CLI identities, bounded
+  allowances, wallet-authenticated merchant sessions, production API charge authorization, live
+  relayer execution, Horizon verification, and secret-free JSON evidence.
+- Submitted and verified 52 intended testnet transactions across 7 payer and 5 merchant accounts:
+  12 Friendbot fundings, 12 trustlines, 7 asset fundings, 7 allowances, 7 mandates, and 7 charges.
+
+#### Verified
+
+- All 52 intended hashes are unique and successful in Horizon.
+- All 7 charge requests reached `succeeded`; each mandate reports one successful charge and
+  1,000,000 base units collected.
+- Script typecheck/lint, evidence assertions, secret scan, and `git diff --check` pass.
+
+#### Risks
+
+- A stopped preflight attempt funded one additional disposable account before detecting a missing
+  explicit CLI network passphrase. No trustline, allowance, mandate, or charge followed; the
+  corrected run therefore produced about 53 total testnet transactions including that funding.
+- These are controlled load accounts, not genuine onboarded users.
+
+#### Follow-ups
+
+- Use the evidence report for technical stress proof only; collect 50 real users separately.

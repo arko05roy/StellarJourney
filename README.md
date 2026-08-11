@@ -19,6 +19,8 @@ Recurring stablecoin payments with limits enforced by a Soroban contract. Payers
 
 - [`create_mandate` transaction](https://stellar.expert/explorer/testnet/tx/8e03653aeddaae57aa8f24176f2f5d51c395356fb97b1c8d75e3166ffbefd5d8)
 - [Relayer-submitted `charge` transaction](https://stellar.expert/explorer/testnet/tx/86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c)
+- [52-transaction stress run](docs/level-5/evidence/testnet-stress-20260730045306-585217.json):
+  12 fresh addresses, 7 mandates, and 7 production-relayed charges; all hashes verified in Horizon
 - System E2E evidence and transaction context: [`docs/architecture.md`](docs/architecture.md)
 
 ### User feedback and next-phase improvement plan

@@ -1,0 +1,495 @@
+{
+  "runId": "stress-20260730045306-585217",
+  "purpose": "Controlled Paymap stress test; not proof of genuine user onboarding.",
+  "network": "testnet",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "apiUrl": "https://paymap-demo-api.onrender.com/v1",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "horizonUrl": "https://horizon-testnet.stellar.org",
+  "contractId": "CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22",
+  "asset": {
+    "code": "PUSD",
+    "issuer": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT",
+    "contractId": "CB223VUC7MMCFT352EO7QLLV6QWHXTDOXOHY2BW7DZTO3VXBXAI7DUZJ",
+    "decimals": 7
+  },
+  "startedAt": "2026-07-30T04:53:06.203Z",
+  "finishedAt": "2026-07-30T05:00:59.525Z",
+  "elapsedMs": 473322,
+  "expectedTransactionCount": 52,
+  "successfulTransactionCount": 52,
+  "uniqueTransactionCount": 52,
+  "failedTransactionCount": 0,
+  "successRate": 1,
+  "distinctAddressCount": 12,
+  "phaseCounts": {
+    "friendbot_funding": 12,
+    "asset_trustline": 12,
+    "asset_funding": 7,
+    "asset_allowance": 7,
+    "create_mandate": 7,
+    "relayed_charge": 7
+  },
+  "accounts": [
+    {
+      "role": "payer",
+      "index": 1,
+      "address": "GDVWC2YTSBPECJO537FNTVN6U2MX7C5ANGOLSUSZU4KCRNO7XLKNKC26",
+      "fundingTransactionHash": "04a0369ba1735d5287e6ae4053549fb7a467e9de6777f6989088ddcfb129fb7e",
+      "trustlineTransactionHash": "7ccced8b205b0dc2990a59e8fbc544217d3d5268c423741dd3f9ea63b5242abd"
+    },
+    {
+      "role": "payer",
+      "index": 2,
+      "address": "GBQ3AZTONBJ2MBYKCC2NJB7AYIYCAHJAUYYANHRYT2WGDFNVJ5XEQKOP",
+      "fundingTransactionHash": "5c0f6dd895efc9db77a5748c91691580a7eedd488477cce73688b615d7c8027f",
+      "trustlineTransactionHash": "ffa452c27cd80852dba29895008ba31ba23e70d7b7d45de9928a87de2665aded"
+    },
+    {
+      "role": "payer",
+      "index": 3,
+      "address": "GDWYT5TDREK7VEOE5RCPMBCBM7VRRDFTD572L5WRN6QJHI62XE3ULNKP",
+      "fundingTransactionHash": "ad94fcc61b0732fc6b96df0d44c2c555950088aa7882da2c83f6fd2dae5e8391",
+      "trustlineTransactionHash": "43480e03d8932b14bec6eba971707d0c35d146f5a115a01c3e594dcbac965d16"
+    },
+    {
+      "role": "payer",
+      "index": 4,
+      "address": "GDANYXBNLCGXABDJVQG2HOHTJ33B5ME3NSDCUYOXVA7UQFFJLCVPCARE",
+      "fundingTransactionHash": "e941b254fe4f445660e89a243a8eb34d0917f02b1642beb7d1b32a61f5c343e7",
+      "trustlineTransactionHash": "af4591d757c4a270b175be34c8d096439315b2df076e406d66a71274064b4161"
+    },
+    {
+      "role": "payer",
+      "index": 5,
+      "address": "GDTOFK4OCOTJM57OVF7FZCSUPEDRAGHQYLZQUK34IBR7L62R43SLH4ZA",
+      "fundingTransactionHash": "8ad6fedbd8c1367d67d0ee4b36267342a2ed7b1d0e66228783f8282819819831",
+      "trustlineTransactionHash": "b2f7bef5024b36b3cf792d8a555d485a30290105de99708f533d2c934825faa4"
+    },
+    {
+      "role": "payer",
+      "index": 6,
+      "address": "GAMSHS6QINQHB2WT3B6GVUH7B5M7YZITKNLPDGNK75E22TFXATKU25AO",
+      "fundingTransactionHash": "f8aa643d0474c51c1bf0d8712ce95208c6abd61e32820c6e5e8bff718910d0b1",
+      "trustlineTransactionHash": "71699ca6d16ee037ce830be9073a8c5ddc9253f1a13a87aa5d1c193ce5743bae"
+    },
+    {
+      "role": "payer",
+      "index": 7,
+      "address": "GA5HGG64QVIEV7OY33CVMWPW6FMYUGZY75KC4SBKTKCFJ2LPFQPP2IUB",
+      "fundingTransactionHash": "7f7c6df315f946d127da5bd15f6188dca881724e377810e0e6cda942a2f5cff1",
+      "trustlineTransactionHash": "0895b98f59884413c03b60045a7c985b0f49b5f95855b35406e98490b015b6b0"
+    },
+    {
+      "role": "merchant",
+      "index": 1,
+      "address": "GDFCSZHR3YU37PM72M3ITKY6J5KHUFARTAI6R7742XTWRUVLW6JFACRC",
+      "fundingTransactionHash": "a9fbce8453b3eaa9373559b13d2961e61d79f1f49a8887db29411a4ab4441b23",
+      "trustlineTransactionHash": "ef262605acb4aff50d4ea5ddd0cd83ca4d8b38cf7a72d4cb5bda5f1e18b9c9fd"
+    },
+    {
+      "role": "merchant",
+      "index": 2,
+      "address": "GCP2LDMSKBL4ENAUFSJU7PIH7W4U5GNDW2FZ2EJWQ4FOLCRA7COVJXNZ",
+      "fundingTransactionHash": "7bd70491a8d486fa18e3a5cd4f9ea1b8c9e813712e04451944afb8d355b147f6",
+      "trustlineTransactionHash": "f45f4b7c240ccd2d377e4d04ec1171eb01254ec581552a6244d47a5c387ccbc5"
+    },
+    {
+      "role": "merchant",
+      "index": 3,
+      "address": "GAUATZ6H6SATGBDXZSH67WQBHK2TGOS36KNTOQENFC7RTZQ455IXI2LL",
+      "fundingTransactionHash": "4a10a09d8321ec60e315f217bcb8883562616061cffe28bf92c02b9a7efd53a4",
+      "trustlineTransactionHash": "b87443f503a0131f563d5a5cbd173faf4548a8d44187926865dc719c8a0be520"
+    },
+    {
+      "role": "merchant",
+      "index": 4,
+      "address": "GDQK5OVF7Z7CFRX5CQ3LLVXDGVXY7HQFNPRYLWRSVPBXSDQ5VSFSWG3Y",
+      "fundingTransactionHash": "33bccfe461422274f54f74d01266da6934fc2f650c6b31e6f0d5fd7db8adc80e",
+      "trustlineTransactionHash": "8a571d79e924e428c980f5f2aa1cf8f25c3ed07f7a1905138e7ec7e6504b6373"
+    },
+    {
+      "role": "merchant",
+      "index": 5,
+      "address": "GAQSV4JWXKG2F4RHDSSGPRX7I2CEN3IW3Z5UYKYKL75LZIE7N4RDNYWT",
+      "fundingTransactionHash": "548547a155f90f706d7d1d8e75f54549f2a1916057ea720e7d9bca1b4aee6d2e",
+      "trustlineTransactionHash": "af6c6454733f9ccb2e3b531db319bde7c071c49eeb3c3473fedbc8cc6da50649"
+    }
+  ],
+  "flows": [
+    {
+      "index": 1,
+      "payerAddress": "GDVWC2YTSBPECJO537FNTVN6U2MX7C5ANGOLSUSZU4KCRNO7XLKNKC26",
+      "merchantAddress": "GDFCSZHR3YU37PM72M3ITKY6J5KHUFARTAI6R7742XTWRUVLW6JFACRC",
+      "assetFundingTransactionHash": "f1b1c24439eaa895b4337baa7aa21997ce9b2ccf6fce39e0021ad611c3e909c9",
+      "allowanceTransactionHash": "3b2332e85c4b4285b7dc8c1d67fddde6950ca37def79d711de35c426836289cd",
+      "mandateTransactionHash": "2bc224a3ca3cba16346e81075fd02cfdc26090a18167972a67aab344f0cdd1c1",
+      "mandateId": "a1cd749adac92d76143c8242083764c7e4161ab25e56aa0bc693d3ef27307038",
+      "checkoutSessionId": "8558b8a9-083f-4331-86ac-e4ff84849bb0",
+      "chargeRequestId": "7da0c25e-5cfb-42f4-8109-3659555c9057",
+      "chargeTransactionHash": "1a7901eedbb8e19b533dfe45e380606289a92d8bdeee84b02870baaf51d6501c",
+      "chargeStatus": "succeeded",
+      "successfulCharges": 1,
+      "totalCollectedBaseUnits": "1000000",
+      "elapsedMs": 254536
+    },
+    {
+      "index": 2,
+      "payerAddress": "GBQ3AZTONBJ2MBYKCC2NJB7AYIYCAHJAUYYANHRYT2WGDFNVJ5XEQKOP",
+      "merchantAddress": "GCP2LDMSKBL4ENAUFSJU7PIH7W4U5GNDW2FZ2EJWQ4FOLCRA7COVJXNZ",
+      "assetFundingTransactionHash": "8a47d50888194f57dc4b67feccb9b21730d7046f8de1e09610c8862aebdd0f07",
+      "allowanceTransactionHash": "2ffddecc3cd3f7d53b89b9eaf566074c91ac62f76ff27d462999dc63aae09dc6",
+      "mandateTransactionHash": "dcb488087aff2a05841f375f549f08a44aae28bd8430c0d83efdc28133f76ac9",
+      "mandateId": "37e86f5bf273b8cd10fe807136b03af2042c02cf9b6d6d744933d3f047ce2074",
+      "checkoutSessionId": "33d2d4dc-35a5-45a6-936b-e1ba42dfabbd",
+      "chargeRequestId": "42ad267f-64b8-40dd-977d-869b70bbe8e4",
+      "chargeTransactionHash": "6a41e045410d9772a2005701fa51e709cbde7ccb57b6dcbf8bfdb7a3256003b2",
+      "chargeStatus": "succeeded",
+      "successfulCharges": 1,
+      "totalCollectedBaseUnits": "1000000",
+      "elapsedMs": 226773
+    },
+    {
+      "index": 3,
+      "payerAddress": "GDWYT5TDREK7VEOE5RCPMBCBM7VRRDFTD572L5WRN6QJHI62XE3ULNKP",
+      "merchantAddress": "GAUATZ6H6SATGBDXZSH67WQBHK2TGOS36KNTOQENFC7RTZQ455IXI2LL",
+      "assetFundingTransactionHash": "2fbed20607ba7176c08e722df8e8ae682942545e569ed04d1a8692e63865eada",
+      "allowanceTransactionHash": "e3a1960a8a72f70805e943be69f35b20aec6c4f337c328f42a00b428c5cd7ce9",
+      "mandateTransactionHash": "e1d2dbcaf1c019546931d3133b1562a9ce8d154f4e25ee020233f59ca6b9d987",
+      "mandateId": "ed4e63997b27c16088907c00a3bac84141cb0e16995b0d31101d56d9eb1cc31d",
+      "checkoutSessionId": "c16e6b17-da12-4630-8ab1-37bbe8c75fb0",
+      "chargeRequestId": "cfbf545a-1472-430f-8d0a-339ede8046ec",
+      "chargeTransactionHash": "c76800c55e78470bec4bdbb823a7b8494335ac593cf389a69a01c9c3ddd403f6",
+      "chargeStatus": "succeeded",
+      "successfulCharges": 1,
+      "totalCollectedBaseUnits": "1000000",
+      "elapsedMs": 192428
+    },
+    {
+      "index": 4,
+      "payerAddress": "GDANYXBNLCGXABDJVQG2HOHTJ33B5ME3NSDCUYOXVA7UQFFJLCVPCARE",
+      "merchantAddress": "GDQK5OVF7Z7CFRX5CQ3LLVXDGVXY7HQFNPRYLWRSVPBXSDQ5VSFSWG3Y",
+      "assetFundingTransactionHash": "71ff54a9b4c845ff175a51f152e6b276c940b1e7945833f9da4c02d1987b17e7",
+      "allowanceTransactionHash": "405aef2bb0c86f602ae29ed090d8a978e530ffd81c3d2c23cafe5f58585d1450",
+      "mandateTransactionHash": "4541ac8f945440d2d4b863cce9f9d72fea7bfc159596d257c6dbb875d884b0ad",
+      "mandateId": "7426f903f29cffc573fd4bc90d6a2fc03555b450ec4f7e02744cd67357e87016",
+      "checkoutSessionId": "17413a6e-ed53-4de1-a1de-be7c3099fba8",
+      "chargeRequestId": "d66fe53c-7727-42d2-a611-17b10691bf9c",
+      "chargeTransactionHash": "2e43e21941163ae41223c6a54d528722705e10379c4548ae53445c2a7513f091",
+      "chargeStatus": "succeeded",
+      "successfulCharges": 1,
+      "totalCollectedBaseUnits": "1000000",
+      "elapsedMs": 162186
+    },
+    {
+      "index": 5,
+      "payerAddress": "GDTOFK4OCOTJM57OVF7FZCSUPEDRAGHQYLZQUK34IBR7L62R43SLH4ZA",
+      "merchantAddress": "GAQSV4JWXKG2F4RHDSSGPRX7I2CEN3IW3Z5UYKYKL75LZIE7N4RDNYWT",
+      "assetFundingTransactionHash": "1592746b96eba8617bd9da138a9dc032cb6adc2c0251849acc0b80a26532118d",
+      "allowanceTransactionHash": "c4fe0d9368ce26575f5019efb68cc9caf9a48def7bda119eb873e164f6809de9",
+      "mandateTransactionHash": "04665fa9a346403d76df2468b19fb0d2f0f1bfcd20f87333609ffb0375add077",
+      "mandateId": "8524c01cbdef0aad681315817d116fbfb615b5305248cc1a1c3e9241bc50e94d",
+      "checkoutSessionId": "02dd0640-c61e-4e03-a8fe-fbc5d52090dc",
+      "chargeRequestId": "7e2017bc-e903-44f1-aa2c-6e4619ae8731",
+      "chargeTransactionHash": "406ebdad39a4de70ec3d21ee6a52015e71e2c68ccecdb27e8ca0ee2c80c8daa8",
+      "chargeStatus": "succeeded",
+      "successfulCharges": 1,
+      "totalCollectedBaseUnits": "1000000",
+      "elapsedMs": 121317
+    },
+    {
+      "index": 6,
+      "payerAddress": "GAMSHS6QINQHB2WT3B6GVUH7B5M7YZITKNLPDGNK75E22TFXATKU25AO",
+      "merchantAddress": "GDFCSZHR3YU37PM72M3ITKY6J5KHUFARTAI6R7742XTWRUVLW6JFACRC",
+      "assetFundingTransactionHash": "89d5fa099254c473163e4eaaaac0d7db6a77fb1de6e3262b79c1bd06c71fc51c",
+      "allowanceTransactionHash": "98dd779cd00e2302c289c2627f9e599109dde3cfd01074adbd0201864ad92abc",
+      "mandateTransactionHash": "008885735b200dea536d8a16bb084e6b6fd7c69dae9a4bd781ac98b711efe97b",
+      "mandateId": "445b06259469c91c089c85f53886404c0fbdd0e1490ac23d675f72682b945b42",
+      "checkoutSessionId": "78b61207-985c-48de-9586-734909c2a340",
+      "chargeRequestId": "fb0c9fc0-aea1-4194-92b2-a758ee487516",
+      "chargeTransactionHash": "d99058dc20dc2a569a297ad5b1bf2add51b8e88dbfd372511823837f8c274184",
+      "chargeStatus": "succeeded",
+      "successfulCharges": 1,
+      "totalCollectedBaseUnits": "1000000",
+      "elapsedMs": 83472
+    },
+    {
+      "index": 7,
+      "payerAddress": "GA5HGG64QVIEV7OY33CVMWPW6FMYUGZY75KC4SBKTKCFJ2LPFQPP2IUB",
+      "merchantAddress": "GCP2LDMSKBL4ENAUFSJU7PIH7W4U5GNDW2FZ2EJWQ4FOLCRA7COVJXNZ",
+      "assetFundingTransactionHash": "55b56727c1a492cb8e846a06dbc70da633765fbbf8a9b76e73de310114d352d0",
+      "allowanceTransactionHash": "483e08f6ffefaed73ea5b1db3922b28ae61b8a6314c5697e6aeb73c16ae07549",
+      "mandateTransactionHash": "f24d5d4f3e008447db1fa9ab1b2be9dfe8c9a7796741bea4ca1d37dfb8098c97",
+      "mandateId": "673f0fc3e14f5e7aa66789e74f870927b2ce976cc6a44b7b8e9f6325bf177082",
+      "checkoutSessionId": "2273bd91-6d96-4567-87ce-7137d8e539f8",
+      "chargeRequestId": "3de7f902-2622-4963-a8fb-c85519baee7e",
+      "chargeTransactionHash": "17f6865d4641498a8ce04418088c38d2b1311b9dba275f0b1543e4255cbf5d9b",
+      "chargeStatus": "succeeded",
+      "successfulCharges": 1,
+      "totalCollectedBaseUnits": "1000000",
+      "elapsedMs": 58812
+    }
+  ],
+  "transactions": [
+    {
+      "hash": "04a0369ba1735d5287e6ae4053549fb7a467e9de6777f6989088ddcfb129fb7e",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GDVWC2YTSBPECJO537FNTVN6U2MX7C5ANGOLSUSZU4KCRNO7XLKNKC26"
+    },
+    {
+      "hash": "7ccced8b205b0dc2990a59e8fbc544217d3d5268c423741dd3f9ea63b5242abd",
+      "phase": "asset_trustline",
+      "sourceAddress": "GDVWC2YTSBPECJO537FNTVN6U2MX7C5ANGOLSUSZU4KCRNO7XLKNKC26"
+    },
+    {
+      "hash": "5c0f6dd895efc9db77a5748c91691580a7eedd488477cce73688b615d7c8027f",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GBQ3AZTONBJ2MBYKCC2NJB7AYIYCAHJAUYYANHRYT2WGDFNVJ5XEQKOP"
+    },
+    {
+      "hash": "ffa452c27cd80852dba29895008ba31ba23e70d7b7d45de9928a87de2665aded",
+      "phase": "asset_trustline",
+      "sourceAddress": "GBQ3AZTONBJ2MBYKCC2NJB7AYIYCAHJAUYYANHRYT2WGDFNVJ5XEQKOP"
+    },
+    {
+      "hash": "ad94fcc61b0732fc6b96df0d44c2c555950088aa7882da2c83f6fd2dae5e8391",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GDWYT5TDREK7VEOE5RCPMBCBM7VRRDFTD572L5WRN6QJHI62XE3ULNKP"
+    },
+    {
+      "hash": "43480e03d8932b14bec6eba971707d0c35d146f5a115a01c3e594dcbac965d16",
+      "phase": "asset_trustline",
+      "sourceAddress": "GDWYT5TDREK7VEOE5RCPMBCBM7VRRDFTD572L5WRN6QJHI62XE3ULNKP"
+    },
+    {
+      "hash": "e941b254fe4f445660e89a243a8eb34d0917f02b1642beb7d1b32a61f5c343e7",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GDANYXBNLCGXABDJVQG2HOHTJ33B5ME3NSDCUYOXVA7UQFFJLCVPCARE"
+    },
+    {
+      "hash": "af4591d757c4a270b175be34c8d096439315b2df076e406d66a71274064b4161",
+      "phase": "asset_trustline",
+      "sourceAddress": "GDANYXBNLCGXABDJVQG2HOHTJ33B5ME3NSDCUYOXVA7UQFFJLCVPCARE"
+    },
+    {
+      "hash": "8ad6fedbd8c1367d67d0ee4b36267342a2ed7b1d0e66228783f8282819819831",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GDTOFK4OCOTJM57OVF7FZCSUPEDRAGHQYLZQUK34IBR7L62R43SLH4ZA"
+    },
+    {
+      "hash": "b2f7bef5024b36b3cf792d8a555d485a30290105de99708f533d2c934825faa4",
+      "phase": "asset_trustline",
+      "sourceAddress": "GDTOFK4OCOTJM57OVF7FZCSUPEDRAGHQYLZQUK34IBR7L62R43SLH4ZA"
+    },
+    {
+      "hash": "f8aa643d0474c51c1bf0d8712ce95208c6abd61e32820c6e5e8bff718910d0b1",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GAMSHS6QINQHB2WT3B6GVUH7B5M7YZITKNLPDGNK75E22TFXATKU25AO"
+    },
+    {
+      "hash": "71699ca6d16ee037ce830be9073a8c5ddc9253f1a13a87aa5d1c193ce5743bae",
+      "phase": "asset_trustline",
+      "sourceAddress": "GAMSHS6QINQHB2WT3B6GVUH7B5M7YZITKNLPDGNK75E22TFXATKU25AO"
+    },
+    {
+      "hash": "7f7c6df315f946d127da5bd15f6188dca881724e377810e0e6cda942a2f5cff1",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GA5HGG64QVIEV7OY33CVMWPW6FMYUGZY75KC4SBKTKCFJ2LPFQPP2IUB"
+    },
+    {
+      "hash": "0895b98f59884413c03b60045a7c985b0f49b5f95855b35406e98490b015b6b0",
+      "phase": "asset_trustline",
+      "sourceAddress": "GA5HGG64QVIEV7OY33CVMWPW6FMYUGZY75KC4SBKTKCFJ2LPFQPP2IUB"
+    },
+    {
+      "hash": "a9fbce8453b3eaa9373559b13d2961e61d79f1f49a8887db29411a4ab4441b23",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GDFCSZHR3YU37PM72M3ITKY6J5KHUFARTAI6R7742XTWRUVLW6JFACRC"
+    },
+    {
+      "hash": "ef262605acb4aff50d4ea5ddd0cd83ca4d8b38cf7a72d4cb5bda5f1e18b9c9fd",
+      "phase": "asset_trustline",
+      "sourceAddress": "GDFCSZHR3YU37PM72M3ITKY6J5KHUFARTAI6R7742XTWRUVLW6JFACRC"
+    },
+    {
+      "hash": "7bd70491a8d486fa18e3a5cd4f9ea1b8c9e813712e04451944afb8d355b147f6",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GCP2LDMSKBL4ENAUFSJU7PIH7W4U5GNDW2FZ2EJWQ4FOLCRA7COVJXNZ"
+    },
+    {
+      "hash": "f45f4b7c240ccd2d377e4d04ec1171eb01254ec581552a6244d47a5c387ccbc5",
+      "phase": "asset_trustline",
+      "sourceAddress": "GCP2LDMSKBL4ENAUFSJU7PIH7W4U5GNDW2FZ2EJWQ4FOLCRA7COVJXNZ"
+    },
+    {
+      "hash": "4a10a09d8321ec60e315f217bcb8883562616061cffe28bf92c02b9a7efd53a4",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GAUATZ6H6SATGBDXZSH67WQBHK2TGOS36KNTOQENFC7RTZQ455IXI2LL"
+    },
+    {
+      "hash": "b87443f503a0131f563d5a5cbd173faf4548a8d44187926865dc719c8a0be520",
+      "phase": "asset_trustline",
+      "sourceAddress": "GAUATZ6H6SATGBDXZSH67WQBHK2TGOS36KNTOQENFC7RTZQ455IXI2LL"
+    },
+    {
+      "hash": "33bccfe461422274f54f74d01266da6934fc2f650c6b31e6f0d5fd7db8adc80e",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GDQK5OVF7Z7CFRX5CQ3LLVXDGVXY7HQFNPRYLWRSVPBXSDQ5VSFSWG3Y"
+    },
+    {
+      "hash": "8a571d79e924e428c980f5f2aa1cf8f25c3ed07f7a1905138e7ec7e6504b6373",
+      "phase": "asset_trustline",
+      "sourceAddress": "GDQK5OVF7Z7CFRX5CQ3LLVXDGVXY7HQFNPRYLWRSVPBXSDQ5VSFSWG3Y"
+    },
+    {
+      "hash": "548547a155f90f706d7d1d8e75f54549f2a1916057ea720e7d9bca1b4aee6d2e",
+      "phase": "friendbot_funding",
+      "sourceAddress": "GAQSV4JWXKG2F4RHDSSGPRX7I2CEN3IW3Z5UYKYKL75LZIE7N4RDNYWT"
+    },
+    {
+      "hash": "af6c6454733f9ccb2e3b531db319bde7c071c49eeb3c3473fedbc8cc6da50649",
+      "phase": "asset_trustline",
+      "sourceAddress": "GAQSV4JWXKG2F4RHDSSGPRX7I2CEN3IW3Z5UYKYKL75LZIE7N4RDNYWT"
+    },
+    {
+      "hash": "f1b1c24439eaa895b4337baa7aa21997ce9b2ccf6fce39e0021ad611c3e909c9",
+      "phase": "asset_funding",
+      "sourceAddress": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT"
+    },
+    {
+      "hash": "3b2332e85c4b4285b7dc8c1d67fddde6950ca37def79d711de35c426836289cd",
+      "phase": "asset_allowance",
+      "sourceAddress": "GDVWC2YTSBPECJO537FNTVN6U2MX7C5ANGOLSUSZU4KCRNO7XLKNKC26"
+    },
+    {
+      "hash": "2bc224a3ca3cba16346e81075fd02cfdc26090a18167972a67aab344f0cdd1c1",
+      "phase": "create_mandate",
+      "sourceAddress": "GDVWC2YTSBPECJO537FNTVN6U2MX7C5ANGOLSUSZU4KCRNO7XLKNKC26"
+    },
+    {
+      "hash": "8a47d50888194f57dc4b67feccb9b21730d7046f8de1e09610c8862aebdd0f07",
+      "phase": "asset_funding",
+      "sourceAddress": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT"
+    },
+    {
+      "hash": "2ffddecc3cd3f7d53b89b9eaf566074c91ac62f76ff27d462999dc63aae09dc6",
+      "phase": "asset_allowance",
+      "sourceAddress": "GBQ3AZTONBJ2MBYKCC2NJB7AYIYCAHJAUYYANHRYT2WGDFNVJ5XEQKOP"
+    },
+    {
+      "hash": "dcb488087aff2a05841f375f549f08a44aae28bd8430c0d83efdc28133f76ac9",
+      "phase": "create_mandate",
+      "sourceAddress": "GBQ3AZTONBJ2MBYKCC2NJB7AYIYCAHJAUYYANHRYT2WGDFNVJ5XEQKOP"
+    },
+    {
+      "hash": "2fbed20607ba7176c08e722df8e8ae682942545e569ed04d1a8692e63865eada",
+      "phase": "asset_funding",
+      "sourceAddress": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT"
+    },
+    {
+      "hash": "e3a1960a8a72f70805e943be69f35b20aec6c4f337c328f42a00b428c5cd7ce9",
+      "phase": "asset_allowance",
+      "sourceAddress": "GDWYT5TDREK7VEOE5RCPMBCBM7VRRDFTD572L5WRN6QJHI62XE3ULNKP"
+    },
+    {
+      "hash": "e1d2dbcaf1c019546931d3133b1562a9ce8d154f4e25ee020233f59ca6b9d987",
+      "phase": "create_mandate",
+      "sourceAddress": "GDWYT5TDREK7VEOE5RCPMBCBM7VRRDFTD572L5WRN6QJHI62XE3ULNKP"
+    },
+    {
+      "hash": "71ff54a9b4c845ff175a51f152e6b276c940b1e7945833f9da4c02d1987b17e7",
+      "phase": "asset_funding",
+      "sourceAddress": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT"
+    },
+    {
+      "hash": "405aef2bb0c86f602ae29ed090d8a978e530ffd81c3d2c23cafe5f58585d1450",
+      "phase": "asset_allowance",
+      "sourceAddress": "GDANYXBNLCGXABDJVQG2HOHTJ33B5ME3NSDCUYOXVA7UQFFJLCVPCARE"
+    },
+    {
+      "hash": "4541ac8f945440d2d4b863cce9f9d72fea7bfc159596d257c6dbb875d884b0ad",
+      "phase": "create_mandate",
+      "sourceAddress": "GDANYXBNLCGXABDJVQG2HOHTJ33B5ME3NSDCUYOXVA7UQFFJLCVPCARE"
+    },
+    {
+      "hash": "1592746b96eba8617bd9da138a9dc032cb6adc2c0251849acc0b80a26532118d",
+      "phase": "asset_funding",
+      "sourceAddress": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT"
+    },
+    {
+      "hash": "c4fe0d9368ce26575f5019efb68cc9caf9a48def7bda119eb873e164f6809de9",
+      "phase": "asset_allowance",
+      "sourceAddress": "GDTOFK4OCOTJM57OVF7FZCSUPEDRAGHQYLZQUK34IBR7L62R43SLH4ZA"
+    },
+    {
+      "hash": "04665fa9a346403d76df2468b19fb0d2f0f1bfcd20f87333609ffb0375add077",
+      "phase": "create_mandate",
+      "sourceAddress": "GDTOFK4OCOTJM57OVF7FZCSUPEDRAGHQYLZQUK34IBR7L62R43SLH4ZA"
+    },
+    {
+      "hash": "89d5fa099254c473163e4eaaaac0d7db6a77fb1de6e3262b79c1bd06c71fc51c",
+      "phase": "asset_funding",
+      "sourceAddress": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT"
+    },
+    {
+      "hash": "98dd779cd00e2302c289c2627f9e599109dde3cfd01074adbd0201864ad92abc",
+      "phase": "asset_allowance",
+      "sourceAddress": "GAMSHS6QINQHB2WT3B6GVUH7B5M7YZITKNLPDGNK75E22TFXATKU25AO"
+    },
+    {
+      "hash": "008885735b200dea536d8a16bb084e6b6fd7c69dae9a4bd781ac98b711efe97b",
+      "phase": "create_mandate",
+      "sourceAddress": "GAMSHS6QINQHB2WT3B6GVUH7B5M7YZITKNLPDGNK75E22TFXATKU25AO"
+    },
+    {
+      "hash": "55b56727c1a492cb8e846a06dbc70da633765fbbf8a9b76e73de310114d352d0",
+      "phase": "asset_funding",
+      "sourceAddress": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT"
+    },
+    {
+      "hash": "483e08f6ffefaed73ea5b1db3922b28ae61b8a6314c5697e6aeb73c16ae07549",
+      "phase": "asset_allowance",
+      "sourceAddress": "GA5HGG64QVIEV7OY33CVMWPW6FMYUGZY75KC4SBKTKCFJ2LPFQPP2IUB"
+    },
+    {
+      "hash": "f24d5d4f3e008447db1fa9ab1b2be9dfe8c9a7796741bea4ca1d37dfb8098c97",
+      "phase": "create_mandate",
+      "sourceAddress": "GA5HGG64QVIEV7OY33CVMWPW6FMYUGZY75KC4SBKTKCFJ2LPFQPP2IUB"
+    },
+    {
+      "hash": "1a7901eedbb8e19b533dfe45e380606289a92d8bdeee84b02870baaf51d6501c",
+      "phase": "relayed_charge",
+      "sourceAddress": "GDFCSZHR3YU37PM72M3ITKY6J5KHUFARTAI6R7742XTWRUVLW6JFACRC"
+    },
+    {
+      "hash": "6a41e045410d9772a2005701fa51e709cbde7ccb57b6dcbf8bfdb7a3256003b2",
+      "phase": "relayed_charge",
+      "sourceAddress": "GCP2LDMSKBL4ENAUFSJU7PIH7W4U5GNDW2FZ2EJWQ4FOLCRA7COVJXNZ"
+    },
+    {
+      "hash": "c76800c55e78470bec4bdbb823a7b8494335ac593cf389a69a01c9c3ddd403f6",
+      "phase": "relayed_charge",
+      "sourceAddress": "GAUATZ6H6SATGBDXZSH67WQBHK2TGOS36KNTOQENFC7RTZQ455IXI2LL"
+    },
+    {
+      "hash": "2e43e21941163ae41223c6a54d528722705e10379c4548ae53445c2a7513f091",
+      "phase": "relayed_charge",
+      "sourceAddress": "GDQK5OVF7Z7CFRX5CQ3LLVXDGVXY7HQFNPRYLWRSVPBXSDQ5VSFSWG3Y"
+    },
+    {
+      "hash": "406ebdad39a4de70ec3d21ee6a52015e71e2c68ccecdb27e8ca0ee2c80c8daa8",
+      "phase": "relayed_charge",
+      "sourceAddress": "GAQSV4JWXKG2F4RHDSSGPRX7I2CEN3IW3Z5UYKYKL75LZIE7N4RDNYWT"
+    },
+    {
+      "hash": "d99058dc20dc2a569a297ad5b1bf2add51b8e88dbfd372511823837f8c274184",
+      "phase": "relayed_charge",
+      "sourceAddress": "GDFCSZHR3YU37PM72M3ITKY6J5KHUFARTAI6R7742XTWRUVLW6JFACRC"
+    },
+    {
+      "hash": "17f6865d4641498a8ce04418088c38d2b1311b9dba275f0b1543e4255cbf5d9b",
+      "phase": "relayed_charge",
+      "sourceAddress": "GCP2LDMSKBL4ENAUFSJU7PIH7W4U5GNDW2FZ2EJWQ4FOLCRA7COVJXNZ"
+    }
+  ]
+}

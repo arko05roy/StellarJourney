@@ -16,7 +16,8 @@
     "demo:relayer": "tsx run-relayer-testnet-demo.ts",
     "demo:scenes": "tsx run-relayer-testnet-demo.ts",
     "verify:indexer": "tsx verify-indexer-testnet.ts",
-    "load:staging": "tsx load-staging.ts"
+    "load:staging": "tsx load-staging.ts",
+    "stress:testnet": "tsx stress-test-testnet.ts"
   },
   "dependencies": {
     "@paymap/contract-client": "workspace:*",
