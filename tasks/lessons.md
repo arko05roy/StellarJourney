@@ -1,5 +1,12 @@
 # Lessons
 
+## Production homepage
+
+- Mistake: deployment verification checked HTTP availability but did not inspect the visible root
+  route, leaving a Phase 0 placeholder live.
+- Rule: every frontend deployment must include a visual smoke test of `/` at desktop and mobile;
+  reject placeholder or phase-scaffold copy before calling the deployment ready.
+
 ## Deployment handoff
 
 - Mistake: gave a broad plan when the user asked what inputs were needed.

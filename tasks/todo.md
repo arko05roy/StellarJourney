@@ -2219,3 +2219,59 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - Paste or import the genuine export, verify transactions, and publish only redacted/aggregate proof.
 - Record/upload the walkthrough, implement the highest-impact observed issue, and add both links to
   README.
+
+---
+
+## Phase 18 - Landing Page
+
+### Plan
+
+- [x] Audit the production root route, existing brand tokens, routes, shadcn configuration, and
+      frontend dependencies.
+- [x] Replace the Phase 0 stub with a responsive AIDA landing page using the requested design skills.
+- [x] Add a project-owned hero visual and isolated GSAP motion with reduced-motion fallbacks.
+- [x] Compose existing shadcn primitives for navigation actions, proof cards, and conversion CTAs.
+- [x] Add focused landing-page tests and update metadata.
+- [x] Verify lint, typecheck, tests, build, desktop/mobile visuals, reduced motion, copy rules, and
+      clean diff.
+
+### Verification
+
+- [x] `pnpm --filter @paymap/web lint`
+- [x] `pnpm --filter @paymap/web typecheck`
+- [x] `pnpm --filter @paymap/web test`
+- [x] `pnpm --filter @paymap/web build`
+- [x] Desktop and mobile screenshots inspected
+- [x] No placeholder copy, em dashes, horizontal overflow, or broken CTA routes
+- [x] `git diff --check`
+
+### Review
+
+#### Changed
+
+- Replaced the Phase 0 root stub with a complete responsive landing page.
+- Added two original Paymap visuals, an honest merchant-product screenshot, and WebP optimization.
+- Added GSAP hero, reveal, word-scrub, and sticky-stack motion with reduced-motion fallbacks.
+- Reworked semantic theme tokens around one cobalt accent and composed shadcn Button, Badge, Card,
+  and Separator primitives.
+- Added landing-page metadata and a focused route/copy regression test.
+
+#### Verified
+
+- Lint and typecheck pass.
+- Web test suite passes: 19 files, 133 tests.
+- Production build passes; `/` is statically rendered.
+- Desktop light/dark and mobile screenshots inspected; desktop hero is exactly two lines and page
+  width equals viewport width.
+- Sticky title and card stack verified after fixing the overflow ancestor.
+- Production Lighthouse: performance 97, accessibility 100, best practices 96, SEO 100; CLS 0 and
+  total blocking time 10 ms.
+
+#### Risks
+
+- The merchant screenshot reflects the current minimal merchant connection screen; replace it after
+  that product surface receives its own visual redesign.
+
+#### Follow-ups
+
+- Push the branch and allow Vercel to redeploy the new root route.
