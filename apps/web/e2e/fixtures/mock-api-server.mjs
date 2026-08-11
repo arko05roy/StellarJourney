@@ -91,27 +91,26 @@ function readJsonBody(req) {
 }
 
 // ---------------------------------------------------------------------------
-// Merchant dashboard fixtures (Phase 12b e2e: create product -> generate
-// checkout link -> view mandates -> view a failed collection -> rotate an
-// API key). Deliberately minimal — only the routes that flow actually
+// Merchant dashboard fixtures: wallet session -> create product -> generate
+// checkout link -> view mandates -> view a failed collection -> create a
+// scoped API key. Deliberately minimal — only the routes that flow actually
 // exercises, matching this file's existing "network-layer stub, not a
 // re-implementation" scope.
 //
-// Keyed by API key in a `Map`, not one shared module-level object:
+// Keyed by opaque session/API credentials, not one shared module-level object:
 // `playwright.config.ts` sets `fullyParallel: true`, and this one mock
 // process is shared by every test in the file (a real webServer, not a
-// per-test fixture) — two tests each calling `POST /v1/merchants` and
-// rotating keys concurrently would otherwise stomp on a single global
-// `merchant` variable and intermittently 401 each other mid-flow (observed
-// directly the first time a second — accessibility — test was added
-// alongside the happy-path test). Each account keeps its own products/
-// checkout-sessions list; rotation re-keys the same account object in the
-// map (new key -> same account, old key removed) rather than mutating a
-// shared singleton.
+// per-test fixture). Each account keeps its own products, checkout sessions,
+// and integration keys so parallel tests cannot stomp shared state.
 // ---------------------------------------------------------------------------
-const merchantAccountsByApiKey = new Map(); // apiKey -> { name, walletAddress, apiKey, products: [], checkoutSessions: [] }
+const merchantAccountsByWallet = new Map();
+const merchantAccountsByApiKey = new Map();
+const merchantSessions = new Map();
+const merchantChallenges = new Map();
 let merchantAccountSeq = 0;
 let merchantKeySeq = 0;
+let merchantSessionSeq = 0;
+let merchantChallengeSeq = 0;
 
 const E2E_MERCHANT_MANDATE_ID = "9".repeat(64);
 const E2E_MERCHANT_PAYER_ADDRESS = "GATESTMERCHANTFLOWPAYERXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
@@ -120,7 +119,9 @@ const E2E_MERCHANT_PAYER_ADDRESS = "GATESTMERCHANTFLOWPAYERXXXXXXXXXXXXXXXXXXXXX
 function requireMerchantAuth(req, res) {
   const header = req.headers.authorization ?? "";
   const match = /^Bearer\s+(\S+)$/i.exec(header);
-  const account = match ? merchantAccountsByApiKey.get(match[1]) : undefined;
+  const account = match
+    ? (merchantSessions.get(match[1])?.account ?? merchantAccountsByApiKey.get(match[1]))
+    : undefined;
   if (!account) {
     send(res, 401, { code: "MISSING_API_KEY", message: "invalid or missing API key" });
     return undefined;
@@ -231,40 +232,131 @@ const server = createServer(async (req, res) => {
   // Merchant dashboard routes
   // -------------------------------------------------------------------------
 
-  if (req.method === "POST" && url.pathname === "/v1/merchants") {
+  if (req.method === "POST" && url.pathname === "/v1/merchant-auth/challenges") {
+    const body = await readJsonBody(req).catch(() => ({}));
+    merchantChallengeSeq += 1;
+    const challengeId = `00000000-0000-4000-8000-${String(merchantChallengeSeq).padStart(12, "0")}`;
+    const message = `Paymap merchant authentication\nWallet: ${body.walletAddress ?? ""}\nChallenge: ${challengeId}`;
+    merchantChallenges.set(challengeId, {
+      walletAddress: body.walletAddress ?? "",
+      message,
+    });
+    send(res, 201, {
+      challengeId,
+      message,
+      networkPassphrase: "Test SDF Network ; September 2015",
+      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/merchant-auth/complete") {
+    const body = await readJsonBody(req).catch(() => ({}));
+    const challenge = merchantChallenges.get(body.challengeId);
+    if (!challenge || challenge.message !== body.message) {
+      send(res, 401, { code: "INVALID_AUTH_CHALLENGE", message: "invalid challenge" });
+      return;
+    }
+    merchantSessionSeq += 1;
+    const sessionToken = `pms_e2e_${String(merchantSessionSeq)}`;
+    const account = merchantAccountsByWallet.get(challenge.walletAddress);
+    merchantSessions.set(sessionToken, {
+      walletAddress: challenge.walletAddress,
+      account,
+    });
+    merchantChallenges.delete(body.challengeId);
+    send(res, 201, {
+      sessionToken,
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+      profileRequired: !account,
+      ...(account
+        ? {
+            merchant: {
+              id: account.id,
+              name: account.name,
+              walletAddress: account.walletAddress,
+            },
+          }
+        : {}),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/merchant-auth/register") {
+    const header = req.headers.authorization ?? "";
+    const match = /^Bearer\s+(\S+)$/i.exec(header);
+    const session = match ? merchantSessions.get(match[1]) : undefined;
+    if (!session) {
+      send(res, 401, { code: "INVALID_MERCHANT_SESSION", message: "invalid session" });
+      return;
+    }
     const body = await readJsonBody(req).catch(() => ({}));
     merchantAccountSeq += 1;
-    merchantKeySeq += 1;
     const account = {
       id: `merchant-e2e-${String(merchantAccountSeq)}`,
       name: body.name ?? "",
-      walletAddress: body.walletAddress ?? "",
-      apiKey: `pmk_e2e_${String(merchantKeySeq)}`,
+      walletAddress: session.walletAddress,
+      apiKeys: [],
       products: [],
       checkoutSessions: [],
       productSeq: 0,
       sessionSeq: 0,
     };
-    merchantAccountsByApiKey.set(account.apiKey, account);
+    merchantAccountsByWallet.set(account.walletAddress, account);
+    session.account = account;
     send(res, 201, {
       merchantId: account.id,
       name: account.name,
       walletAddress: account.walletAddress,
-      apiKeyId: `key-${String(merchantKeySeq)}`,
-      apiKey: account.apiKey,
     });
     return;
   }
 
-  if (req.method === "POST" && url.pathname === "/v1/merchants/me/api-keys/rotate") {
+  if (req.method === "POST" && url.pathname === "/v1/merchant-auth/logout") {
+    const header = req.headers.authorization ?? "";
+    const match = /^Bearer\s+(\S+)$/i.exec(header);
+    if (match) merchantSessions.delete(match[1]);
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/merchants/me/api-keys") {
     const account = requireMerchantAuth(req, res);
     if (!account) return;
-    const oldKeyId = `key-was-${account.apiKey}`;
-    merchantAccountsByApiKey.delete(account.apiKey);
+    send(res, 200, { data: account.apiKeys });
+    return;
+  }
+
+  if (req.method === "POST" && url.pathname === "/v1/merchants/me/api-keys") {
+    const account = requireMerchantAuth(req, res);
+    if (!account) return;
+    const body = await readJsonBody(req).catch(() => ({}));
     merchantKeySeq += 1;
-    account.apiKey = `pmk_e2e_${String(merchantKeySeq)}`;
-    merchantAccountsByApiKey.set(account.apiKey, account);
-    send(res, 201, { apiKeyId: `key-${String(merchantKeySeq)}`, apiKey: account.apiKey, revokedApiKeyId: oldKeyId });
+    const apiKeyId = `key-${String(merchantKeySeq)}`;
+    const apiKey = `sk_live_e2e_${String(merchantKeySeq)}`;
+    const key = {
+      id: apiKeyId,
+      name: body.name ?? "",
+      keyPrefix: apiKey.slice(0, 15),
+      scopes: body.scopes ?? [],
+      status: "active",
+      createdAt: new Date().toISOString(),
+    };
+    account.apiKeys.push(key);
+    merchantAccountsByApiKey.set(apiKey, account);
+    send(res, 201, { apiKeyId, name: key.name, scopes: key.scopes, apiKey });
+    return;
+  }
+
+  if (req.method === "DELETE" && url.pathname.startsWith("/v1/merchants/me/api-keys/")) {
+    const account = requireMerchantAuth(req, res);
+    if (!account) return;
+    const keyId = url.pathname.split("/").at(-1);
+    const key = account.apiKeys.find((candidate) => candidate.id === keyId);
+    if (key) key.status = "revoked";
+    res.writeHead(204);
+    res.end();
     return;
   }
 

@@ -4,14 +4,14 @@
  * a real on-chain `MandateReader` (backed by `@paymap/contract-client` and
  * the committed testnet deployment registry) into `buildApp`.
  */
-import { getEnv } from "@paymap/config";
+import { getApiEnv } from "@paymap/config";
 import { loadDeployment } from "@paymap/contract-client";
 import { buildApp } from "./app.js";
 import { createPrismaClient } from "./db.js";
 import { createChainMandateReader } from "./chain/mandate-reader.js";
 
 async function main(): Promise<void> {
-  const env = getEnv();
+  const env = getApiEnv();
   const prisma = createPrismaClient();
   const deployment = loadDeployment(env.STELLAR_NETWORK);
   const mandateReader = createChainMandateReader(deployment);
@@ -20,7 +20,13 @@ async function main(): Promise<void> {
     prisma,
     mandateReader,
     hashSecret: env.API_KEY_HASH_SECRET,
+    merchantAuthDomain: env.MERCHANT_AUTH_DOMAIN,
     webhookEncryptionKey: env.WEBHOOK_ENCRYPTION_KEY,
+    authorizationEncryptionKey: env.AUTHORIZATION_ENCRYPTION_KEY,
+    chargeAuthorization: {
+      contractId: deployment.contractId,
+      networkPassphrase: deployment.networkPassphrase,
+    },
     // `allowInsecureWebhookHttp` intentionally omitted (defaults to false) —
     // production never accepts http:// webhook URLs (CLAUDE.md §12 decision #8).
     logger: true,

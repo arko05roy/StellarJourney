@@ -1,5 +1,28 @@
 # Lessons
 
+## Merchant authentication
+
+- Mistake: used a merchant API key as the human dashboard login and accepted a typed payout
+  address without wallet-ownership proof.
+- Rule: authenticate merchants by a signed wallet challenge first; issue scoped API keys only
+  afterward for server-to-server integrations, never as the primary dashboard session.
+
+## Production homepage
+
+- Mistake: deployment verification checked HTTP availability but did not inspect the visible root
+  route, leaving a Phase 0 placeholder live.
+- Rule: every frontend deployment must include a visual smoke test of `/` at desktop and mobile;
+  reject placeholder or phase-scaffold copy before calling the deployment ready.
+
+## Deployment handoff
+
+- Mistake: gave a broad plan when the user asked what inputs were needed.
+- Rule: list only exact external blockers: provider login/access, deployable Git ref, and required
+  runtime secret; explicitly say when domain/email are optional.
+- Mistake: assumed the frontend and backend should share one hosting provider.
+- Rule: treat frontend and backend provider choices independently before creating deployment
+  resources.
+
 - soroban-sdk 27 `#[contracttype]` enums: named-field (struct-style) variants
   are rejected at compile time ("enum variant X has unsupported named
   fields"). Only unit variants and non-empty tuple variants work. Before
@@ -17,19 +40,19 @@
   in `lib.rs`) before any test module can use `std::vec![...]`,
   `std::vec::Vec`, etc. Without it, `std::` fails to resolve even though
   `soroban-sdk`'s `testutils` feature itself depends on std — the crate's own
-  `no_std` attribute still blocks the path in *our* code.
+  `no_std` attribute still blocks the path in _our_ code.
 - `MockAuth`/`MockAuthInvoke` (soroban-sdk 27 testutils) hold borrowed
   references (`invoke: &'a MockAuthInvoke`, `address: &'a Address`). Building
   them as inline temporaries inside `client.mock_auths(&[MockAuth { .. }])`
   fails to borrow-check ("temporary value dropped while borrowed") as soon as
-  the resulting client is used in a *later* statement (e.g.
+  the resulting client is used in a _later_ statement (e.g.
   `let mocked = client.mock_auths(&[..]); mocked.try_foo();`). Bind the
   `MockAuthInvoke` and the `[MockAuth; N]` array to their own `let`s first,
   then pass `&auths` — only works inline when `.mock_auths(...).method(...)`
   is one unbroken chain in a single statement.
 - `Address::require_auth()` (no args) records, in `env.auths()`, an
-  `AuthorizedInvocation` whose args equal the *actual arguments of the
-  current contract invocation* — i.e. for `fn create_mandate(env, input)`
+  `AuthorizedInvocation` whose args equal the _actual arguments of the
+  current contract invocation_ — i.e. for `fn create_mandate(env, input)`
   calling `input.payer.require_auth()`, `env.auths()` shows args
   `(input,).into_val(&env)`, matching the top-level call args exactly. This
   only diverges when the contract explicitly calls
@@ -38,14 +61,14 @@
   `Result<Result<T, ConversionError>, Result<Error, InvokeError>>` (two
   independent nested `Result`s, not one double-wrapped one) — unwrap with
   `.map_err(|e| e.expect("..."))` (peels the outer `Result<Error,
-  InvokeError>` down to the contract's typed `Error`) then
+InvokeError>` down to the contract's typed `Error`) then
   `.map(|inner| inner.expect("..."))` (peels the inner conversion result down
   to `T`), giving a clean `Result<T, Error>` for test assertions like
   `assert_eq!(result, Err(Error::Foo))`.
 - `env.events().all()` returns a `ContractEvents` wrapper with no `.len()` —
   use `.events()` (returns `&[xdr::ContractEvent]`) and call `.is_empty()` /
   `.len()` on that slice instead. It also only reflects events from the
-  *last* contract invocation (like `env.auths()`), so "no event on a
+  _last_ contract invocation (like `env.auths()`), so "no event on a
   rejected call" can be asserted directly after that one call without
   needing to filter by call boundary.
 - To assert an exact `#[contractevent]` payload in a test without hand-
@@ -57,7 +80,7 @@
   `ContractEvents` has a `PartialEq<soroban_sdk::Vec<(Address, Vec<Val>, Val)>>`
   impl specifically for this.
 - `soroban_sdk::token::TokenClient` requires a contract that implements the
-  *exact* SEP-41 fn signatures (`allowance(from, spender) -> i128`,
+  _exact_ SEP-41 fn signatures (`allowance(from, spender) -> i128`,
   `approve(from, spender, amount, live_until_ledger)`, `balance(id) -> i128`,
   `transfer_from(spender, from, to, amount)`). A local test-only mock token
   used both via its own generated `MockTokenClient` (test setup: mint,
@@ -71,7 +94,7 @@
   without checking if you ever add a caller for it.
 - When a contract-owned address (e.g. `env.current_contract_address()`) is
   passed as the `spender` to another contract's `transfer_from`, that inner
-  contract's `spender.require_auth()` call succeeds automatically with *no*
+  contract's `spender.require_auth()` call succeeds automatically with _no_
   `mock_auths` entry needed for it — Soroban auto-authorizes a contract
   address when that contract is the direct invoker of the current call.
   This is what makes the bounded-allowance "contract is the spender" model
@@ -79,7 +102,7 @@
   mock-auth entry for the contract's own address in tests, it isn't needed
   and there's no address to sign it as anyway.
 - A generated `<Contract>Client<'a>` struct's `env`/`address` fields are
-  *owned* (`Env`, `Address`, both `.clone()`d in), not references — only the
+  _owned_ (`Env`, `Address`, both `.clone()`d in), not references — only the
   `mock_auths`/`set_auths` slice arguments are the `'a`-lifetime-bound part.
   Don't try to return a client with a hardcoded `'static` lifetime from a
   test helper (`fn setup() -> (.., MockTokenClient<'static>)`) if the caller
@@ -93,7 +116,7 @@
   `5i128.checked_sub(10)` = `Some(-5)`, a perfectly valid non-overflowing
   i128) — it only fails on true arithmetic overflow near `i128::MIN`. A
   mock/test token's "insufficient balance" or "insufficient allowance"
-  panic must be an explicit `if updated < 0 { panic!(..) }` check *after*
+  panic must be an explicit `if updated < 0 { panic!(..) }` check _after_
   `checked_sub`, not something `checked_sub` itself detects.
 - To assert storage state after an expected contract panic without ending
   the test (`#[should_panic]` terminates the test at the panic), wrap the
@@ -104,21 +127,21 @@
   Soroban's own trap propagation — a sub-invocation panic (e.g. a
   test-token's forced-failure branch) unwinds through the client's
   `try_*`/plain call exactly like an auth failure does.
-- `env.events().all()` (and `env.auths()`) only reflect the *last* contract
+- `env.events().all()` (and `env.auths()`) only reflect the _last_ contract
   invocation. A test helper that wraps a call and then makes even one more
   contract call afterward for convenience (e.g. an invariant spot-check like
   `token.balance(&contract_id)` tacked onto the end of a `charge_success`
   helper) silently erases the prior call's events/auths for anyone who calls
   the helper and then tries to inspect them — the assertion doesn't error,
   it just compares against an empty list. Symptom: `assert_eq!(recorded,
-  expected)` fails with `left: []` even though the code being tested
+expected)` fails with `left: []` even though the code being tested
   genuinely published the events. Fix: keep any "make one more call to
   assert an invariant" helper strictly separate from the call whose
-  events/auths matter, and call it only *after* the events/auths inspection
+  events/auths matter, and call it only _after_ the events/auths inspection
   is done, never folded into the same helper.
 - Implementing a real `Completed` transition (previously only reachable via
   direct storage writes in earlier-phase tests) can retroactively invalidate
-  an earlier phase's test that predicted a *different* rejection reason for
+  an earlier phase's test that predicted a _different_ rejection reason for
   what is now an unreachable intermediate state. Concretely: a step-N
   "count/threshold exceeded" pre-flight check that used to be the first
   thing a repeat caller would hit becomes permanently shadowed by an
@@ -132,17 +155,17 @@
   `fn transfer(env, from: Address, to: MuxedAddress, amount: i128)` — this
   was flagged as a risk in an earlier lesson before any caller existed, and
   it mattered the moment `refund` added one. `MuxedAddress::from(&Address)`
-  (or `.into()`) wraps a non-multiplexed address as the *same underlying
-  `AddressObject` value* an `Address`-typed parameter expects, so it decodes
+  (or `.into()`) wraps a non-multiplexed address as the _same underlying
+  `AddressObject` value_ an `Address`-typed parameter expects, so it decodes
   correctly even against a test-double contract method that still declares
   `to: Address` (didn't need to change `mock-token`'s simplified signature).
   Clippy's `needless_borrows_for_generic_args` will flag
   `&MuxedAddress::from(&x)` passed where `&MuxedAddress` might look required
   — the client wrapper accepts the owned value directly; drop the extra `&`.
-- A single `Address::require_auth()` call only authorizes *one point* in the
+- A single `Address::require_auth()` call only authorizes _one point_ in the
   call graph (the current contract invocation's own function + args). If
   your function calls `require_auth()` once and then invokes another
-  contract whose method *also* calls `require_auth()` on the same address
+  contract whose method _also_ calls `require_auth()` on the same address
   (e.g. `refund`'s explicit `mandate.merchant.require_auth()` followed by
   `TokenClient::transfer`'s internal `from.require_auth()` where
   `from == merchant`), that is TWO separate auth requirements needing one
@@ -178,11 +201,11 @@
   afterward) since a caught host-level panic here never leaves `Env`'s
   storage in a torn state the test goes on to read incorrectly.
 - Soroban's guest-to-guest cross-contract call path (`Env::invoke_contract`
-  *and* `Env::try_invoke_contract` both) always uses
+  _and_ `Env::try_invoke_contract` both) always uses
   `ContractReentryMode::Prohibited` — verified directly in
   `soroban-env-host-27.0.1`'s `host.rs` (`default_external_call()` hard-codes
   `Prohibited`) and `host/frame.rs:924-956` (`Prohibited` rejects a call back
-  into *any* contract already anywhere in the invocation stack, not just
+  into _any_ contract already anywhere in the invocation stack, not just
   literal self-recursion). This means a token contract cannot reenter the
   contract that's currently calling it via the standard call mechanism, full
   stop — no reentrancy guard needs to be hand-written in application
@@ -190,9 +213,9 @@
   rejection surfaces as a genuine panic when the caller used the plain
   (non-`try_`) `invoke_contract` binding (its generated wrapper calls
   `.unwrap_infallible()` on the host result), so it propagates and aborts
-  the *entire* outer invocation, not just the reentrant sub-call.
+  the _entire_ outer invocation, not just the reentrant sub-call.
 - `soroban-sdk`'s `Env::default()` (under `testutils`/`cfg(test)`) writes a
-  `test_snapshots/<test-name>.<N>.json` file for *every* `Env` on drop by
+  `test_snapshots/<test-name>.<N>.json` file for _every_ `Env` on drop by
   default (`EnvTestConfig::capture_snapshot_at_drop`, default `true`) —
   fine, and this repo's existing convention, for a test module with one
   `Env` per test function. A property/fuzz-style harness that constructs
@@ -200,20 +223,20 @@
   random sequence) will otherwise dump hundreds of near-duplicate JSON
   files per run (observed: 250 files, 5.5MB, for a 250-sequence suite).
   Disable it selectively where this pattern applies via `let mut env =
-  Env::default(); env.set_config(EnvTestConfig { capture_snapshot_at_drop:
-  false });` (`soroban_sdk::testutils::EnvTestConfig`) — leave the default
+Env::default(); env.set_config(EnvTestConfig { capture_snapshot_at_drop:
+false });` (`soroban_sdk::testutils::EnvTestConfig`) — leave the default
   on everywhere else so the directed, deterministic test modules keep their
   committed snapshots.
 - `clippy::unusual_byte_groupings` (part of `-D warnings`) fires on a hex
   literal with underscores unless every group has the same digit count —
   `0xC0FFEE_1234_5678` fails (group of 6, then two groups of 4); a leading
   `00` pad to make it `0x00C0_FFEE_1234_5678` (groups of 4) satisfies it. A
-  literal with *no* underscores at all (e.g. a raw 16-hex-digit constant
+  literal with _no_ underscores at all (e.g. a raw 16-hex-digit constant
   like a golden-ratio PRNG multiplier) is exempt regardless of digit count —
   the lint only triggers once grouping is attempted and is inconsistent.
 - `stellar contract build --package <name> --optimize` optimizes the wasm
   **in place**, overwriting `target/wasm32v1-none/release/<name>.wasm`
-  itself — it does *not* produce a separate `<name>.optimized.wasm` file.
+  itself — it does _not_ produce a separate `<name>.optimized.wasm` file.
   That distinct-file convention belongs to the older, now-deprecated
   `stellar contract optimize --wasm <path>` two-step command. A deploy
   script written against the two-step convention's output filename will
@@ -225,15 +248,15 @@
   one's filename or size convention without a real run).
 - `@stellar/stellar-sdk/contract`'s `AssembledTransaction.signAuthEntries({ authorizeEntry })`
   is not a "supply your own signer" hook the way it first looks — the SDK
-  *always* calls whatever `authorizeEntry` function you pass with the exact
+  _always_ calls whatever `authorizeEntry` function you pass with the exact
   same 5-argument signature as `@stellar/stellar-sdk`'s own `authorizeEntry`
   (`entry, signer, validUntilLedgerSeq, networkPassphrase, forAddress?`),
   where `signer` (2nd arg) is an SDK-internally-constructed wallet-style
   callback wrapping whatever `signAuthEntry` you provided (or a no-op if you
   didn't). To drive this with a bare `Keypair` instead of a wallet callback,
-  write an `authorizeEntry` override that *ignores* the 2nd argument
+  write an `authorizeEntry` override that _ignores_ the 2nd argument
   entirely and calls the base `authorizeEntry(entry, keypair,
-  validUntilLedgerSeq, networkPassphrase, forAddress)` directly — confirmed
+validUntilLedgerSeq, networkPassphrase, forAddress)` directly — confirmed
   by reading `signAuthEntries`'s actual implementation
   (`assembled_transaction.js`, not just the `.d.ts`): passing a
   reference-distinct custom `authorizeEntry` also skips the "you must
@@ -241,7 +264,7 @@
   `authorizeEntry === <the default import>`), so `signAuthEntry` doesn't
   need to be supplied at all in this path. Verified working end-to-end on
   real testnet (Phase 7's merchant-authorizes/relayer-submits `charge`).
-- Zod (v3) infers *any* object field whose output type includes `undefined`
+- Zod (v3) infers _any_ object field whose output type includes `undefined`
   as an optional TS property (`field?: T`) — this happens identically for
   both `.optional()` and `z.union([Schema, z.undefined()])`. This can never
   structurally match a hand-written domain type that models "key always
@@ -268,7 +291,7 @@
 - In a pnpm workspace, a Prisma schema that lives outside every package
   (e.g. a monorepo-root `prisma/schema.prisma`, per CLAUDE.md §4) breaks
   `prisma generate`'s default no-`output` behavior: it resolves
-  `@prisma/client` relative to the *schema's own directory*, and if that
+  `@prisma/client` relative to the _schema's own directory_, and if that
   directory has no satisfying install it shells out to
   `pnpm add @prisma/client@<version>` as a subprocess — which reliably
   failed (exit 1, no useful stderr) every time it was spawned from inside
@@ -278,12 +301,12 @@
   `output = "./generated/client"`) — this is also Prisma's own documented
   forward-compatible pattern and sidesteps the whole resolution problem.
   Centralize the resulting deep relative import (`../../../prisma/generated/
-  client/index.js` or similar) in exactly one file per consuming package
+client/index.js` or similar) in exactly one file per consuming package
   (mirror `packages/contract-client/src/deployment-registry.ts`'s existing
   repo-root-reach-through convention) so nothing else needs to know the path.
 - Prisma's CLI (`prisma migrate deploy`/`generate`) reads `DATABASE_URL` from
   its own environment at invoke time — independent of whatever a
-  `vitest.setup.ts` sets on `process.env` for the *test* process. Running
+  `vitest.setup.ts` sets on `process.env` for the _test_ process. Running
   `prisma migrate deploy --schema ../../prisma/schema.prisma` from a
   different package's directory (e.g. `apps/api`, schema two levels up)
   won't pick up a root-level `.env` automatically. Fix: place a `.env`
@@ -291,11 +314,11 @@
   loads `.env` from the schema's own directory. In CI, set `DATABASE_URL` as
   a job/step-level environment variable instead; no file needed there.
 - A plain `INSERT` (Prisma's typed `.create()`) that hits a unique-
-  constraint violation *inside a transaction* doesn't just fail that one
+  constraint violation _inside a transaction_ doesn't just fail that one
   statement — it poisons the entire enclosing Postgres transaction
   (`25P02: current transaction is aborted, commands ignored until end of
-  transaction block`). Catching the JS exception and then trying to run
-  *any* further query in that same transaction (e.g. a `SELECT` to read the
+transaction block`). Catching the JS exception and then trying to run
+  _any_ further query in that same transaction (e.g. a `SELECT` to read the
   winning row for an idempotency replay) fails too, even though the code
   "handles" the first error. For an insert-or-read-existing pattern that
   must stay in one transaction (to inherit Postgres's MVCC blocking
@@ -311,7 +334,7 @@
   `index.js:333`) does `throw params.errorResponseBuilder(req, respCtx)`
   **verbatim** — whatever plain object/value a custom `errorResponseBuilder`
   returns becomes the "error" Fastify's central `setErrorHandler` receives,
-  completely unwrapped. Only the plugin's own *default* builder returns a
+  completely unwrapped. Only the plugin's own _default_ builder returns a
   real `Error` instance with `.statusCode` set; a custom builder returning
   e.g. `{code, message}` with no `statusCode` field is indistinguishable
   from any other unexpected object once it reaches a generic error handler
@@ -331,21 +354,21 @@
   observed directly (`apps/api`'s and `apps/relayer`'s test suites both
   failing with `deleteMany()`/`create()` FK violations) the first time both
   suites coexisted in one `pnpm test` run, not predicted in advance. Fix:
-  give the newer app's tests a distinct Postgres *schema* (a namespace
+  give the newer app's tests a distinct Postgres _schema_ (a namespace
   within the same database, via `DATABASE_URL`'s `?schema=` query param) —
   full physical isolation, no cross-process coordination needed, and
   `prisma migrate deploy` auto-creates the schema if it doesn't exist yet.
   Set the override where the `prisma migrate deploy` shell step itself runs
   (a package.json `test` script, via `export DATABASE_URL=... &&`), not only
   in `vitest.setup.ts` — `vitest.setup.ts` only takes effect once vitest's
-  Node process starts, which is *after* `migrate deploy` already ran as a
+  Node process starts, which is _after_ `migrate deploy` already ran as a
   separate `&&`-chained command against whatever `DATABASE_URL` was already
   in the shell environment.
 - `@stellar/stellar-sdk/contract`'s `AssembledTransaction.signAndSend()` /
   `SentTransaction.send()` already polls `getTransaction` in a loop
   (exponential backoff, up to `DEFAULT_TIMEOUT` = 5 minutes) until a
   non-`NOT_FOUND` status, and `SentTransaction.result` parses the
-  *confirmed* `getTransactionResponse.returnValue` — not a replay of the
+  _confirmed_ `getTransactionResponse.returnValue` — not a replay of the
   earlier simulation. Verified by reading the SDK's own source
   (`lib/esm/contract/sent_transaction.js`), not assumed. A relayer/worker
   built on top of `submitAsInvoker`/`submitAsRelayer` does not need to
@@ -389,7 +412,7 @@
   apply unknown utility class `border-border`" (the plain CSS custom
   properties the CLI writes to `:root`/`.dark` are never registered as
   Tailwind color tokens under v3 — that registration is a v4 `@theme
-  inline` block the CLI simply doesn't emit for a v3-detected project).
+inline` block the CLI simply doesn't emit for a v3-detected project).
   Fix was to actually migrate the project to Tailwind v4
   (`@tailwindcss/postcss`, `@import "tailwindcss"` replacing the three
   `@tailwind` directives, `@custom-variant dark (&:where(.dark, .dark *));`
@@ -405,7 +428,7 @@
   and check `project.tailwindVersion` actually matches what's installed
   before writing any component that depends on the generated theme tokens.
 - A Next.js Client Component that imports **any** value binding from a
-  workspace package's barrel `index.ts` pulls in that barrel's *entire*
+  workspace package's barrel `index.ts` pulls in that barrel's _entire_
   transitive module graph into the browser bundle — including a sibling
   module the import statement never actually touches, if that sibling is
   re-exported via `export * from "./other.js"` in the same barrel. Concrete
@@ -414,12 +437,12 @@
   `node:url` at module-load time, for `loadDeployment`); a Client Component
   importing only `createMandateRegistryClient` from the bare package
   specifier still fails `next build` with `UnhandledSchemeError: Reading
-  from "node:fs" is not handled by plugins` (webpack has no browser
+from "node:fs" is not handled by plugins` (webpack has no browser
   polyfill for the Node builtin scheme). A **type-only** import from the
   same barrel (`import type { DeploymentRecord } from "@paymap/contract-client"`)
   is safe and adds nothing to the bundle (erased entirely at compile time,
   confirmed by reading the compiled output) — the failure mode is
-  specifically a *value* import through a barrel that also re-exports a
+  specifically a _value_ import through a barrel that also re-exports a
   Node-only module. Fix: add narrow subpath `exports` entries
   (`"./client"`, `"./domain"`) to the package's `package.json` pointing
   directly at the specific built files, and have the browser-bundled
@@ -428,7 +451,7 @@
   consumer (apps/api, apps/relayer, scripts).
 - A Next.js App Router route with a `loading.tsx` boundary streams its
   response: the initial HTTP response (status 200, headers already sent)
-  commits *before* the async Server Component's work resolves. Calling
+  commits _before_ the async Server Component's work resolves. Calling
   `notFound()` (from `next/navigation`) deep inside that async work still
   renders the correct not-found UI content inside the stream, but **the
   already-committed HTTP status code stays 200** — verified directly via
@@ -486,8 +509,8 @@
   same-origin policy at all, so this class of bug is invisible to them by
   construction.
 - `@testing-library/react`'s auto-cleanup between tests (unmounting whatever `render()` left in the
-  DOM) only self-registers when a *global* `afterEach` function exists (`typeof afterEach ===
-  'function'` check in its own source) - this requires `vitest.config.ts`'s `test.globals: true`.
+  DOM) only self-registers when a _global_ `afterEach` function exists (`typeof afterEach ===
+'function'` check in its own source) - this requires `vitest.config.ts`'s `test.globals: true`.
   This repo's `apps/web/vitest.config.ts` doesn't set that (test files import
   `describe`/`it`/`afterEach` explicitly from `"vitest"` instead), so cleanup silently never ran:
   every `it()` in a multi-test file kept accumulating unmounted DOM from every prior test in that
@@ -498,13 +521,13 @@
   (`pause-button`, `mandate-status-badge`, ...), which turned into `getByTestId`'s strict-mode
   "multiple elements found" error, not an obviously-cleanup-shaped symptom. Fix: add
   `afterEach(cleanup)` explicitly in `vitest.setup.ts` (`import { afterEach } from "vitest"; import
-  { cleanup } from "@testing-library/react";`) - one central fix, not a per-test-file workaround,
+{ cleanup } from "@testing-library/react";`) - one central fix, not a per-test-file workaround,
   and it silently benefited every pre-existing component test file too once added.
 - Also invalid-but-silently-transform-failing JSX: a prop written as
   `mandateId="a".repeat(64)` (missing the `{}` around a template/expression, i.e. string-literal
   syntax followed by a method call outside braces) is a parse error, not a type error - Vitest's
   esbuild-based transform reports it as a bare "Transform failed with 1 error" with no useful
-  pointer to the exact prop, at the *file* level, so every test in that file fails together. Always
+  pointer to the exact prop, at the _file_ level, so every test in that file fails together. Always
   wrap any non-bare-string JSX attribute value in `{}` (`mandateId={"a".repeat(64)}`), and if a test
   file fails with an opaque transform error before any test even starts, grep it for `="` followed by
   a method call rather than assuming a logic bug.
@@ -518,7 +541,7 @@
   stand-in all starting with the same word), give the actual interactive/target element a longer,
   more specific prefix (`mandate-card-item-<id>`) rather than trying to retrofit exclusions into
   every consuming locator.
-- A Next.js dashboard/list page whose cards filter by *live, derived* status (e.g. "Upcoming"/
+- A Next.js dashboard/list page whose cards filter by _live, derived_ status (e.g. "Upcoming"/
   "Active" tabs showing only `status === "Active"` mandates) will make a just-paused or just-
   revoked item disappear from the tab the user is looking at the instant the action confirms, since
   the live re-read immediately reflects the new status and the filter is re-evaluated on every
@@ -533,7 +556,7 @@
   `net.isIP`/DNS-shaped check downstream needs the bracket stripped first,
   or every IPv6-literal branch silently falls through to "not a recognized
   IP" / triggers an unwanted DNS lookup instead of matching. Also: `net.isIP`
-  and `URL` both *normalize* a dotted-quad IPv4-mapped IPv6 literal
+  and `URL` both _normalize_ a dotted-quad IPv4-mapped IPv6 literal
   (`::ffff:127.0.0.1`) to its compressed-hex form (`::ffff:7f00:1`) — a
   regex written only against the dotted form silently misses the normalized
   one. Handle both forms explicitly (expand the `::`-compressed hextets by
@@ -542,7 +565,7 @@
 - The "a Client Component value-importing anything from a workspace
   package's barrel drags in the barrel's entire re-export graph, including
   Node-only modules the import never touches" failure mode (first hit with
-  `@paymap/contract-client`, see the earlier lesson above) recurs for *any*
+  `@paymap/contract-client`, see the earlier lesson above) recurs for _any_
   package whenever a new Node-only module is added to an already-consumed
   barrel — not just the original package. Adding three new `node:crypto`/
   `node:dns`/`node:net`-using modules to `@paymap/shared`'s barrel broke
@@ -562,13 +585,13 @@
   `Parameters<typeof fetch>[1]` instead of naming the DOM-lib type directly
   — resolves correctly regardless of which lib set is configured.
 - Under `exactOptionalPropertyTypes: true`, `fetch(url, { body: maybeString
-  })` where `maybeString: string | undefined` fails to typecheck even though
+})` where `maybeString: string | undefined` fails to typecheck even though
   `RequestInit.body` is nominally `BodyInit | null | undefined` — the
-  *inferred object literal's* `body` property becomes `string | undefined`
+  _inferred object literal's_ `body` property becomes `string | undefined`
   (assignable) vs. the target wanting the key entirely optional/absent when
   unset. Same fix as every other `exactOptionalPropertyTypes` hit in this
   repo: conditionally spread the key (`...(body !== undefined ? { body:
-  JSON.stringify(body) } : {})`) rather than passing `undefined` as a value.
+JSON.stringify(body) } : {})`) rather than passing `undefined` as a value.
 - `undici`'s `Agent({ connect: { lookup } })` is the correct primitive for
   "pin this one HTTP request's actual TCP connection to a pre-validated IP
   while still using the real hostname for TLS SNI and the `Host` header" —
@@ -579,7 +602,7 @@
   `fetch`'s TS types (from `@types/node`) don't reliably include
   `dispatcher` in `RequestInit`, but `undici`'s own exported `fetch` does.
 - A merchant-registered webhook secret needs both an encrypted-at-rest
-  storage format *and* a way for tests to prove round-trip correctness
+  storage format _and_ a way for tests to prove round-trip correctness
   without ever asserting against the plaintext secret value inside a stored
   ciphertext string — `expect(encrypted).not.toContain(secret)` plus a
   separate `decryptWebhookSecret(encrypted, key) === secret` assertion is
@@ -588,7 +611,7 @@
 - A Next.js Server Action that mutates a cookie (`cookies().set(...)`) and a
   Server Component page that redirects based on that same cookie's presence
   cannot coexist on the page the action was submitted from: Next.js
-  re-renders the current route's Server Components as part of the *same*
+  re-renders the current route's Server Components as part of the _same_
   action response once a cookie changes, so a `redirect()` guarded on
   "cookie now present" fires before the client ever sees the action's own
   returned state — a "create account, then show the new secret exactly
@@ -598,10 +621,10 @@
   unit tests (those never rendered the full page tree through a real
   Server Action round trip). Fix: the one page a "mutate a cookie and keep
   rendering here" action targets must not redirect on cookie presence at
-  all; every *other* page's normal "redirect if not connected" guard is
+  all; every _other_ page's normal "redirect if not connected" guard is
   unaffected and can stay as strict as before.
 - `e2e/fixtures/mock-api-server.mjs`-style Node mock servers used by
-  Playwright's `webServer` config are one shared process for the *entire*
+  Playwright's `webServer` config are one shared process for the _entire_
   spec file when `fullyParallel: true` (the default in this repo's
   `playwright.config.ts`) — module-level mutable state shaped like a
   single object (`let merchant = {...}`) works fine for one test but
@@ -622,23 +645,23 @@
   a plain string field nothing validates — needs a real encoded value:
   `StrKey.encodeContract(Buffer.alloc(32, <any byte>))` (Node) or the
   browser-safe equivalent. Existing E2E fixture constants using the
-  fake-looking form work fine *only* where nothing actually runs
+  fake-looking form work fine _only_ where nothing actually runs
   `StrKey.isValid*` against them (e.g. a field just echoed back by a mock
   server, never client-side-validated) — don't copy that pattern into a
   form whose client-side validation (this repo's `validateProductForm`,
   for one) genuinely checksum-checks the address before allowing submit.
 - The "a browser-bundled package's barrel re-exports a Node-only sibling"
   failure mode (`node:fs`/`node:path`/`node:url` leaking into a Next.js
-  Client Component's bundle via a *value* import through a barrel) recurs
+  Client Component's bundle via a _value_ import through a barrel) recurs
   transitively, one layer removed from where the Node-only module actually
   lives. Adding `packages/stellar/src/events.ts` (which itself only imports
-  from `@paymap/contract-client`'s *root* barrel — not Node-only on its own)
+  from `@paymap/contract-client`'s _root_ barrel — not Node-only on its own)
   to `packages/stellar/src/index.ts`'s own barrel broke `apps/web`'s
   `next build` (`UnhandledSchemeError: Reading from "node:fs"`), because
   `contract-client`'s root barrel re-exports `deployment-registry.js`
   (`node:fs`) and `apps/web` already value-imports from `@paymap/stellar`'s
   root. The fix from the original lesson (add a narrow subpath export,
-  `./events`, on the *inner* package and import that instead of its root)
+  `./events`, on the _inner_ package and import that instead of its root)
   applies exactly the same way one level up — but the bug has to be
   hunted down at `pnpm build` time (a real Next.js webpack error, not a
   typecheck or lint failure) since neither `tsc` nor `eslint` catch a
@@ -647,3 +670,12 @@
   that new module's own imports (even indirectly, through another
   workspace package's root) touch a Node builtin, and if so, add/consume a
   subpath export instead of touching the barrel.
+- Submission transaction evidence should default to CSV when reviewers need
+  spreadsheet analysis. Keep one transaction per row with phase, hash, source
+  address, verification status, and an explorer link; do not make JSON the
+  only public artifact.
+- Prisma CLI loads both `<cwd>/.env` and the schema directory's `.env`, then
+  rejects duplicate variable names. When a project intentionally supports
+  both files, run schema validation from an isolated temporary cwd while
+  keeping the real schema path; never rename or delete a developer's env file
+  just to make the check pass.

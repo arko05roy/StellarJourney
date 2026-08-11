@@ -4,7 +4,7 @@
  * merchant's — see `chain-gateway.ts`'s module doc for what is deliberately
  * *not* solved here).
  */
-import { getEnv } from "@paymap/config";
+import { getRelayerEnv } from "@paymap/config";
 import { loadDeployment, type DeploymentRecord } from "@paymap/contract-client";
 import { keypairSigner, type KeypairSigner } from "@paymap/stellar";
 
@@ -14,10 +14,11 @@ export interface RelayerConfig {
   deployment: DeploymentRecord;
   relayerSigner: KeypairSigner;
   webhookEncryptionKey: string;
+  authorizationEncryptionKey: string;
 }
 
 export function loadRelayerConfig(): RelayerConfig {
-  const env = getEnv();
+  const env = getRelayerEnv();
   const deployment = loadDeployment(env.STELLAR_NETWORK);
   const relayerSigner = keypairSigner(env.RELAYER_SECRET_KEY);
   return {
@@ -26,5 +27,6 @@ export function loadRelayerConfig(): RelayerConfig {
     deployment,
     relayerSigner,
     webhookEncryptionKey: env.WEBHOOK_ENCRYPTION_KEY,
+    authorizationEncryptionKey: env.AUTHORIZATION_ENCRYPTION_KEY,
   };
 }

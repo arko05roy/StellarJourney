@@ -46,10 +46,13 @@ export function toDomainMandateStatus(status: GenMandateStatus): MandateStatus {
  * `maxPerCharge` — since nothing downstream of this package needs to know
  * about the SDK constraint that produced the positional form.
  */
-export type AmountRule = { kind: "fixed"; amount: bigint } | { kind: "variable"; maxPerCharge: bigint };
+export type AmountRule =
+  { kind: "fixed"; amount: bigint } | { kind: "variable"; maxPerCharge: bigint };
 
 export function toDomainAmountRule(rule: GenAmountRule): AmountRule {
-  return rule.tag === "Fixed" ? { kind: "fixed", amount: rule.values[0] } : { kind: "variable", maxPerCharge: rule.values[0] };
+  return rule.tag === "Fixed"
+    ? { kind: "fixed", amount: rule.values[0] }
+    : { kind: "variable", maxPerCharge: rule.values[0] };
 }
 
 export function fromDomainAmountRule(rule: AmountRule): GenAmountRule {
@@ -99,7 +102,10 @@ export function toDomainMandate(mandate: GenMandate): Mandate {
     totalCollected: mandate.total_collected,
     currentPeriodStart: mandate.current_period_start,
     currentPeriodCollected: mandate.current_period_collected,
-    lastChargedAt: mandate.last_charged_at,
+    // Live stellar-sdk decoding yields `null` for Soroban `Option::None`
+    // even though the generated TS alias says `undefined`. Normalize both
+    // here so bigint consumers never treat null as a timestamp.
+    lastChargedAt: mandate.last_charged_at ?? undefined,
     createdAt: mandate.created_at,
     metadataHash: idToHex(mandate.metadata_hash),
   };

@@ -15,7 +15,12 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { CalendarClock, PauseCircle, Sparkles } from "lucide-react";
 import type { Mandate } from "@paymap/contract-client";
 import type { DeploymentRecord } from "@paymap/contract-client";
-import { fetchConsumerMandates, fetchConsumerPaymentHistory, type ConsumerMandateSummary, type ConsumerPaymentHistory } from "@/lib/dashboard-api";
+import {
+  fetchConsumerMandates,
+  fetchConsumerPaymentHistory,
+  type ConsumerMandateSummary,
+  type ConsumerPaymentHistory,
+} from "@/lib/dashboard-api";
 import { deriveEffectiveStatus, computeNextEligibleChargeDate } from "@/lib/mandate-status";
 import { toDisplayError, type DisplayError } from "@/lib/errors";
 import { formatAssetSymbol } from "@/lib/format";
@@ -54,7 +59,9 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
   const [address, setAddress] = useState<string | undefined>(undefined);
   const [connectError, setConnectError] = useState<DisplayError | undefined>(undefined);
   const [tab, setTab] = useState<DashboardTab>("upcoming");
-  const [discovery, setDiscovery] = useState<FetchState<ConsumerMandateSummary[]>>({ status: "idle" });
+  const [discovery, setDiscovery] = useState<FetchState<ConsumerMandateSummary[]>>({
+    status: "idle",
+  });
   const [liveMandates, setLiveMandates] = useState<Record<string, LiveMandateState>>({});
   const [history, setHistory] = useState<FetchState<ConsumerPaymentHistory>>({ status: "idle" });
   const [actionStates, setActionStates] = useState<Record<string, MandateCardActionState>>({});
@@ -62,7 +69,14 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
   const [nowUnixSeconds] = useState<bigint>(() => BigInt(Math.floor(Date.now() / 1000)));
 
   const signer = useMemo(
-    () => (address ? { publicKey: address, signTransaction: wallet.signTransaction, signAuthEntry: wallet.signAuthEntry } : undefined),
+    () =>
+      address
+        ? {
+            publicKey: address,
+            signTransaction: wallet.signTransaction,
+            signAuthEntry: wallet.signAuthEntry,
+          }
+        : undefined,
     [address, wallet],
   );
 
@@ -73,7 +87,10 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
         const mandate = await gateway.getMandate(mandateId);
         setLiveMandates((prev) => ({ ...prev, [mandateId]: { status: "success", mandate } }));
       } catch (error) {
-        setLiveMandates((prev) => ({ ...prev, [mandateId]: { status: "error", error: toDisplayError(error) } }));
+        setLiveMandates((prev) => ({
+          ...prev,
+          [mandateId]: { status: "error", error: toDisplayError(error) },
+        }));
       }
     },
     [gateway],
@@ -143,7 +160,10 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
         // user (e.g. someone else already revoked it) — refresh live state
         // alongside the error so the card's controls re-derive correctly
         // rather than staying stale (the task's explicit requirement).
-        setActionStates((prev) => ({ ...prev, [mandateId]: { error: { action, display: toDisplayError(error) } } }));
+        setActionStates((prev) => ({
+          ...prev,
+          [mandateId]: { error: { action, display: toDisplayError(error) } },
+        }));
       } finally {
         await refreshMandate(mandateId);
       }
@@ -163,7 +183,9 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
   if (!address) {
     return (
       <div className="flex flex-col gap-4">
-        {connectError ? <ErrorBanner error={connectError} onRetry={() => void handleConnect()} /> : null}
+        {connectError ? (
+          <ErrorBanner error={connectError} onRetry={() => void handleConnect()} />
+        ) : null}
         <WalletGate connecting={connecting} onConnect={() => void handleConnect()} />
       </div>
     );
@@ -172,11 +194,18 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
   const mandateIds = discovery.data?.map((s) => s.mandateId) ?? [];
   const effectiveMandates = mandateIds
     .map((id) => ({ id, summary: summaryById.get(id), live: liveMandates[id] }))
-    .filter((entry): entry is { id: string; summary: ConsumerMandateSummary; live: LiveMandateState } => entry.summary !== undefined && entry.live !== undefined);
+    .filter(
+      (entry): entry is { id: string; summary: ConsumerMandateSummary; live: LiveMandateState } =>
+        entry.summary !== undefined && entry.live !== undefined,
+    );
 
   const withStatus = effectiveMandates
     .filter((entry) => entry.live.status === "success" && entry.live.mandate)
-    .map((entry) => ({ ...entry, mandate: entry.live.mandate as Mandate, status: deriveEffectiveStatus(entry.live.mandate as Mandate, nowUnixSeconds) }));
+    .map((entry) => ({
+      ...entry,
+      mandate: entry.live.mandate as Mandate,
+      status: deriveEffectiveStatus(entry.live.mandate as Mandate, nowUnixSeconds),
+    }));
 
   const upcoming = withStatus
     .filter((entry) => entry.status === "Active")
@@ -188,14 +217,20 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
       if (nextB === undefined) return -1;
       return nextA < nextB ? -1 : nextA > nextB ? 1 : 0;
     });
-  const active = withStatus.filter((entry) => entry.status === "Active").sort((a, b) => a.summary.merchant.name.localeCompare(b.summary.merchant.name));
+  const active = withStatus
+    .filter((entry) => entry.status === "Active")
+    .sort((a, b) => a.summary.merchant.name.localeCompare(b.summary.merchant.name));
   const pausedEnded = withStatus.filter((entry) => entry.status !== "Active");
 
   const loadingCount = effectiveMandates.filter((entry) => entry.live.status === "loading").length;
 
-  function renderMandateList(list: typeof withStatus, empty: { icon: ReactNode; title: string; description: string }) {
+  function renderMandateList(
+    list: typeof withStatus,
+    empty: { icon: ReactNode; title: string; description: string },
+  ) {
     if (discovery.status === "loading" || loadingCount > 0) return <DashboardLoadingSkeleton />;
-    if (list.length === 0) return <EmptyState icon={empty.icon} title={empty.title} description={empty.description} />;
+    if (list.length === 0)
+      return <EmptyState icon={empty.icon} title={empty.title} description={empty.description} />;
     return (
       <div className="flex flex-col gap-4">
         {list.map((entry) => (
@@ -221,7 +256,10 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
       <DashboardNav value={tab} onChange={setTab} />
 
       {discovery.status === "error" && discovery.error ? (
-        <ErrorBanner error={discovery.error} onRetry={() => void loadDiscoveryAndHistory(address)} />
+        <ErrorBanner
+          error={discovery.error}
+          onRetry={() => void loadDiscoveryAndHistory(address)}
+        />
       ) : null}
 
       {discovery.status === "success" && (discovery.data?.length ?? 0) === 0 ? (
@@ -236,37 +274,46 @@ export function DashboardShell({ deployment, wallet, gateway }: DashboardShellPr
             ? renderMandateList(upcoming, {
                 icon: <CalendarClock className="size-6" />,
                 title: "Nothing upcoming",
-                description: "Active automatic payments eligible for a future charge will appear here.",
+                description:
+                  "Active automatic payments eligible for a future charge will appear here.",
               })
             : null}
           {tab === "active"
             ? renderMandateList(active, {
                 icon: <Sparkles className="size-6" />,
                 title: "No active automatic payments",
-                description: "Automatic payments you've authorized and that are currently active will appear here.",
+                description:
+                  "Automatic payments you've authorized and that are currently active will appear here.",
               })
             : null}
           {tab === "paused-ended"
             ? renderMandateList(pausedEnded, {
                 icon: <PauseCircle className="size-6" />,
                 title: "Nothing paused or ended",
-                description: "Paused, cancelled, completed, or expired automatic payments will appear here.",
+                description:
+                  "Paused, cancelled, completed, or expired automatic payments will appear here.",
               })
             : null}
           {tab === "history" ? (
             history.status === "loading" ? (
               <MandateCardSkeleton />
             ) : history.status === "error" && history.error ? (
-              <ErrorBanner error={history.error} onRetry={() => void loadDiscoveryAndHistory(address)} />
+              <ErrorBanner
+                error={history.error}
+                onRetry={() => void loadDiscoveryAndHistory(address)}
+              />
             ) : (
               <PaymentHistoryList
                 payments={history.data?.payments ?? []}
                 failedAttempts={history.data?.failedAttempts ?? []}
+                network={deployment.network}
                 assetDecimalsFor={(mandateId) => summaryById.get(mandateId)?.assetDecimals ?? 7}
               />
             )
           ) : null}
-          {tab === "settings" ? <SettingsPanel address={address} onDisconnect={handleDisconnect} /> : null}
+          {tab === "settings" ? (
+            <SettingsPanel address={address} onDisconnect={handleDisconnect} />
+          ) : null}
         </>
       )}
 

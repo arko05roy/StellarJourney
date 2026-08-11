@@ -87,6 +87,22 @@ export interface ChargeResponse {
   createdAt: string;
 }
 
+export interface ChargeAuthorizationChallenge {
+  id: string;
+  mandateId: string;
+  chargeId: string;
+  amount: string;
+  invoiceHash: string;
+  scheduledFor: string;
+  merchantAddress: string;
+  contractId: string;
+  networkPassphrase: string;
+  signatureExpirationLedger: number;
+  unsignedAuthorizationEntryXdr: string;
+  authorizationPreimageXdr: string;
+  status: "pending";
+}
+
 // ---------------------------------------------------------------------------
 // Payments / refunds
 // ---------------------------------------------------------------------------
@@ -128,7 +144,8 @@ export interface RefundResponse {
 // Mandates (live on-chain read — GET /v1/mandates/:id)
 // ---------------------------------------------------------------------------
 
-export type MandateAmountRule = { kind: "fixed"; amountBaseUnits: string } | { kind: "variable"; maxPerChargeBaseUnits: string };
+export type MandateAmountRule =
+  { kind: "fixed"; amountBaseUnits: string } | { kind: "variable"; maxPerChargeBaseUnits: string };
 
 export interface MandateResponse {
   id: string;

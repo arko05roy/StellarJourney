@@ -8,11 +8,25 @@ import { randomBytes } from "node:crypto";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import { decodeMandateErrorName, type MandateContractError } from "@paymap/stellar";
 import { encryptWebhookSecret, generateWebhookSecret } from "@paymap/shared";
-import type { Mandate, MandateLifecycleEvent, MandateLifecycleEventKind, PaymentReceipt } from "@paymap/contract-client";
+import type {
+  Mandate,
+  MandateLifecycleEvent,
+  MandateLifecycleEventKind,
+  PaymentReceipt,
+} from "@paymap/contract-client";
 import { MandateReadError } from "@paymap/contract-client";
 import { createPrismaClient, type PrismaClient } from "../db.js";
-import type { ChainGateway, ChargeArgs, ChargeSubmitResult, PreparedCharge } from "../chain-gateway.js";
-import type { ChainEventsGateway, ChainEventsGetParams, ChainEventsPage } from "../indexer/chain-events-gateway.js";
+import type {
+  ChainGateway,
+  ChargeArgs,
+  ChargeSubmitResult,
+  PreparedCharge,
+} from "../chain-gateway.js";
+import type {
+  ChainEventsGateway,
+  ChainEventsGetParams,
+  ChainEventsPage,
+} from "../indexer/chain-events-gateway.js";
 
 export function createTestPrisma(): PrismaClient {
   return createPrismaClient();
@@ -28,7 +42,10 @@ export interface TestMerchantWithWebhook {
 }
 
 /** Creates a `Merchant` row with a real (encrypted-at-rest) webhook endpoint configured — the fixture `webhook-delivery.test.ts` needs. */
-export async function createMerchantWithWebhook(prisma: PrismaClient, webhookUrl: string): Promise<TestMerchantWithWebhook> {
+export async function createMerchantWithWebhook(
+  prisma: PrismaClient,
+  webhookUrl: string,
+): Promise<TestMerchantWithWebhook> {
   const rawSecret = generateWebhookSecret();
   const merchant = await prisma.merchant.create({
     data: {
@@ -56,6 +73,7 @@ export async function cleanDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.refundRequest.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.chargeRequest.deleteMany();
+  await prisma.chargeAuthorization.deleteMany();
   await prisma.mandateIndex.deleteMany();
   await prisma.checkoutSession.deleteMany();
   await prisma.product.deleteMany();
@@ -210,7 +228,9 @@ export class FakeChainGateway implements ChainGateway {
   readonly chargeCallLog: ChargeArgs[] = [];
   readonly submitCallLog: ChargeArgs[] = [];
 
-  prepareResult: (args: ChargeArgs) => { ok: true; receipt: PaymentReceipt } | { ok: false; error: MandateContractError } = () => ({
+  prepareResult: (
+    args: ChargeArgs,
+  ) => { ok: true; receipt: PaymentReceipt } | { ok: false; error: MandateContractError } = () => ({
     ok: false,
     error: decodeMandateErrorName("MandateNotFound"),
   });
@@ -248,7 +268,9 @@ export async function createMerchant(
   overrides: { walletAddress?: string; name?: string } = {},
 ): Promise<{ id: string; walletAddress: string }> {
   const walletAddress = overrides.walletAddress ?? randomStellarAccountAddress();
-  const merchant = await prisma.merchant.create({ data: { name: overrides.name ?? "Test Merchant", walletAddress } });
+  const merchant = await prisma.merchant.create({
+    data: { name: overrides.name ?? "Test Merchant", walletAddress },
+  });
   return { id: merchant.id, walletAddress };
 }
 
@@ -282,10 +304,18 @@ export function buildLifecycleEvent(overrides: {
     rpcEventId: overrides.rpcEventId ?? `${String(ledger)}-0`,
   };
   if (overrides.kind === "mandate_created") {
-    return { ...common, kind: "mandate_created", asset: overrides.asset ?? randomStellarContractAddress() };
+    return {
+      ...common,
+      kind: "mandate_created",
+      asset: overrides.asset ?? randomStellarContractAddress(),
+    };
   }
   if (overrides.kind === "mandate_completed") {
-    return { ...common, kind: "mandate_completed", successfulCharges: overrides.successfulCharges ?? 1 };
+    return {
+      ...common,
+      kind: "mandate_completed",
+      successfulCharges: overrides.successfulCharges ?? 1,
+    };
   }
   return { ...common, kind: overrides.kind };
 }

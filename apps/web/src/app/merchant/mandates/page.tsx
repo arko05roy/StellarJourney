@@ -1,16 +1,23 @@
 import Link from "next/link";
 import { Users } from "lucide-react";
-import { requireMerchantApiKey } from "@/lib/merchant-guard";
+import { requireMerchantSession } from "@/lib/merchant-guard";
 import { listMandates, listProducts } from "@/lib/merchant-api";
 import { formatMandateAmountRule, resolveAssetDecimals } from "@/lib/merchant-mandate-display";
 import { formatBillingFrequency } from "@/lib/format";
 import { MandateStatusBadge } from "@/components/dashboard/status-badge";
 import { EmptyState } from "@/components/dashboard/empty-state";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 export default async function MandatesPage() {
-  const apiKey = await requireMerchantApiKey();
+  const apiKey = await requireMerchantSession();
   const [rows, products] = await Promise.all([listMandates(apiKey), listProducts(apiKey)]);
 
   return (
@@ -38,9 +45,18 @@ export default async function MandatesPage() {
               <TableRow key={row.mandateId} data-testid={`mandate-row-${row.mandateId}`}>
                 {row.live ? (
                   <>
-                    <TableCell className="font-mono text-xs">{row.mandate.payer.slice(0, 6)}…{row.mandate.payer.slice(-6)}</TableCell>
-                    <TableCell>{formatMandateAmountRule(row.mandate, resolveAssetDecimals(products, row.mandate.asset))}</TableCell>
-                    <TableCell>{formatBillingFrequency(BigInt(row.mandate.periodSeconds))}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {row.mandate.payer.slice(0, 6)}…{row.mandate.payer.slice(-6)}
+                    </TableCell>
+                    <TableCell>
+                      {formatMandateAmountRule(
+                        row.mandate,
+                        resolveAssetDecimals(products, row.mandate.asset),
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {formatBillingFrequency(BigInt(row.mandate.periodSeconds))}
+                    </TableCell>
                     <TableCell>
                       <MandateStatusBadge status={row.mandate.status} />
                     </TableCell>
@@ -58,7 +74,11 @@ export default async function MandatesPage() {
                   </>
                 )}
                 <TableCell className="text-right">
-                  <Link href={`/merchant/mandates/${row.mandateId}`} className="text-sm font-medium text-primary hover:underline" data-testid={`mandate-detail-link-${row.mandateId}`}>
+                  <Link
+                    href={`/merchant/mandates/${row.mandateId}`}
+                    className="text-sm font-medium text-primary hover:underline"
+                    data-testid={`mandate-detail-link-${row.mandateId}`}
+                  >
                     View
                   </Link>
                 </TableCell>

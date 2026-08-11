@@ -101,7 +101,7 @@ a signature at all if that simulation already came back `Err`.
    boundary of the whole product. The relayer is the transaction's source account (pays the fee,
    owns the sequence number) but never signs the merchant's authorization entry; the merchant
    signs only that one Soroban auth entry via `AssembledTransaction.signAuthEntries({ address,
-   authorizeEntry })`.
+authorizeEntry })`.
 
 `packages/stellar/src/signer.ts`'s `keypairSigner(secretKey)` wraps a raw `Keypair` as both
 callback shapes the SDK needs (`signTransaction` for the tx envelope, an `authorizeEntry` override
@@ -182,22 +182,22 @@ One table, two input universes:
 - **Infra conditions** the relayer itself observes and that never produce a contract error at all:
   `RPC_UNAVAILABLE`, `SEND_FAILED`, `TX_NOT_INCLUDED` — always transient.
 
-| Contract error | Class | Contract error | Class |
-| --- | --- | --- | --- |
-| MandateNotFound | permanent | InsufficientAllowance | **transient** |
-| MandateNotActive | permanent | InsufficientBalance | **transient** |
-| MandatePaused | permanent | PaymentNotFound | permanent |
-| MandateRevoked | permanent | RefundExceedsPayment | permanent |
-| MandateCompleted | permanent | DuplicateRefund | permanent |
-| MandateExpired | permanent | ArithmeticOverflow | permanent |
-| ChargeBeforeStart | permanent | InvalidMandateInput | permanent |
-| ChargeTooSoon | permanent | DuplicateMandate | permanent |
-| InvalidAmount | permanent | InvalidStateTransition | permanent |
-| AmountExceedsChargeLimit | permanent | RefundNotFound | permanent |
-| AmountExceedsPeriodLimit | permanent | | |
-| ChargeCountExceeded | permanent | | |
-| DuplicateCharge | permanent | | |
-| UnauthorizedMerchant | permanent | | |
+| Contract error           | Class     | Contract error         | Class         |
+| ------------------------ | --------- | ---------------------- | ------------- |
+| MandateNotFound          | permanent | InsufficientAllowance  | **transient** |
+| MandateNotActive         | permanent | InsufficientBalance    | **transient** |
+| MandatePaused            | permanent | PaymentNotFound        | permanent     |
+| MandateRevoked           | permanent | RefundExceedsPayment   | permanent     |
+| MandateCompleted         | permanent | DuplicateRefund        | permanent     |
+| MandateExpired           | permanent | ArithmeticOverflow     | permanent     |
+| ChargeBeforeStart        | permanent | InvalidMandateInput    | permanent     |
+| ChargeTooSoon            | permanent | DuplicateMandate       | permanent     |
+| InvalidAmount            | permanent | InvalidStateTransition | permanent     |
+| AmountExceedsChargeLimit | permanent | RefundNotFound         | permanent     |
+| AmountExceedsPeriodLimit | permanent |                        |               |
+| ChargeCountExceeded      | permanent |                        |               |
+| DuplicateCharge          | permanent |                        |               |
+| UnauthorizedMerchant     | permanent |                        |               |
 
 ### Retry schedule (`src/retry-schedule.ts`)
 
@@ -206,7 +206,7 @@ PLAN.md §15: attempt 1 at scheduled time, then +6h, +24h, +72h, then `permanent
 
 ### At-most-one-success under duplicate delivery (decision #2)
 
-BullMQ's deterministic job id (`chargeRequest.id`, `src/queue.ts`) collapses duplicate *enqueues*,
+BullMQ's deterministic job id (`chargeRequest.id`, `src/queue.ts`) collapses duplicate _enqueues_,
 but the system does not rely on BullMQ's own job locking for correctness. The actual guarantee is
 the DB-guarded `scheduled|retryable_failed -> processing` transition
 (`apps/api/src/state-machine.ts::transitionChargeRequest`, reused verbatim, not re-implemented): a
@@ -225,7 +225,7 @@ BullMQ dedupes the enqueue, and the pipeline's DB claim is the real backstop reg
 
 ### The one open trust-model question this phase surfaces
 
-`contracts/mandate-registry/src/charge.rs` requires `mandate.merchant.require_auth()` on *every*
+`contracts/mandate-registry/src/charge.rs` requires `mandate.merchant.require_auth()` on _every_
 call — never the relayer. Nothing built through Phase 8 defines how a merchant's signature for a
 specific, server-generated `charge_id` reaches this untrusted process without it custodying a
 merchant secret key (which would defeat the whole point of this phase). `ChainGateway`'s
@@ -289,7 +289,7 @@ apps/web/src/components/checkout/*            state machine (lib/checkout-state.
 
 `packages/contract-client`'s root barrel (`export * from "./deployment-registry.js"`) reads
 `deployments/<network>.json` via `node:fs` at import time — fine for every Node consumer, but
-importing *any* value binding from the root barrel inside a Next.js Client Component drags that
+importing _any_ value binding from the root barrel inside a Next.js Client Component drags that
 Node-only module into the browser bundle too (a bundler can't tell which named export a mixed
 value+type import statement actually needs). `package.json` gained `./client`/`./domain` subpath
 exports so `apps/web/src/lib/chain-gateway.ts` (a client-bundled file) can import
@@ -305,7 +305,7 @@ connect wallet -> `create_mandate` (payer-signs-and-submits, `submitAsInvoker` �
 Phase 7's demo script) -> bounded `approve` on the product's asset contract (`packages/stellar`'s
 new `buildApprove`, amount = `computeMaxExposure` + a disclosed 1% headroom, `computeBoundedAllowance`
 in `lib/mandate-terms.ts`) -> `POST .../mandate` to link the session. The reducer's one
-load-bearing transition: `CREATE_MANDATE_SUCCESS` sets `mandateId` and it is *never cleared* by a
+load-bearing transition: `CREATE_MANDATE_SUCCESS` sets `mandateId` and it is _never cleared_ by a
 later `APPROVE_ERROR` — a step-1-succeeds/step-2-fails run renders a "created but not funded yet"
 notice with a retry-approve action reading `mandateId` straight off state, never a dead end.
 
@@ -333,7 +333,7 @@ disagreement:
   name, asset address/decimals, a `cachedStatus` deliberately named to signal "last known, not
   authoritative"); `GET /v1/consumer/payments?payerAddress=` lists `Payment`/`ChargeRequest` rows
   for the same discovered mandate ids. Neither endpoint's status/amount fields are ever rendered as
-  a mandate's *current* state.
+  a mandate's _current_ state.
 - **Authority (chain, `lib/mandate-gateway.ts`)** — one `get_mandate` simulation call per
   discovered mandate id, run directly from the browser against Soroban RPC. Every field a mandate
   card shows (status, amounts, period usage, next eligible date) is derived from this live read,
@@ -354,7 +354,7 @@ read method:
   (`Active`/`Paused` past `expiresAt` reads as `Expired`). Defense in depth: a live `get_mandate`
   already returns this computed status, so this mostly matters for a `MandateIndex`-cached label
   shown before the live read resolves.
-- `computeEffectivePeriodUsage` — the period-usage meter uses the *effective* period at "now", not
+- `computeEffectivePeriodUsage` — the period-usage meter uses the _effective_ period at "now", not
   the mandate's raw stored `currentPeriodStart`/`currentPeriodCollected`, so an idle mandate never
   shows a stale "period full" reading (same `floor((t - start_at) / period_seconds)` boundary math
   as `charge.rs`).
@@ -383,7 +383,7 @@ is a long-lived singleton reused across every mandate card and every action.
 
 Mirrors `checkout-state.ts`'s reducer pattern. Revocation itself is unconditional and immediate the
 moment `revoke_mandate` confirms (PLAN.md §10.9) — nothing downstream can make it conditional. What
-the reducer sequences *after* that is the lead's decision: `checking-allowance` ->
+the reducer sequences _after_ that is the lead's decision: `checking-allowance` ->
 (`allowance-prompt` if non-zero, straight to `complete` if already zero) -> `zeroing-allowance` (or
 `SKIP_ALLOWANCE`) -> `complete`. Declining the prompt is a first-class, fully-supported outcome —
 the mandate is already safely cancelled either way. `components/dashboard/cancel-autopay-dialog.tsx`
@@ -394,7 +394,7 @@ callback's identity changed.
 
 ### `lib/failure-reasons.ts` — payment-history's failed-attempt copy
 
-Distinct from `lib/errors.ts`'s checkout-flow copy (which frames the *payer's own* action failing).
+Distinct from `lib/errors.ts`'s checkout-flow copy (which frames the _payer's own_ action failing).
 Every one of the 24 frozen contract error codes plus the relayer's 3 infra-transient reasons
 (`RPC_UNAVAILABLE`/`SEND_FAILED`/`TX_NOT_INCLUDED`, `apps/relayer/src/classify.ts`) gets a
 "here's what was tried, here's why we blocked it" sentence — a blocked attempt on this dashboard is
@@ -409,7 +409,7 @@ history, and tab filtering. The five-tab nav (PLAN.md §16.1) filters the same l
 ways: "Upcoming"/"Active" both show `status === "Active"` mandates (different sort — soonest next
 charge vs. merchant name), "Paused & ended" shows everything else. A `pause`/`resume` failure
 (e.g. the mandate was already revoked in another tab/session underneath the user) both surfaces an
-inline error *and* triggers `refreshMandate` in a `finally` block, so the card's controls re-derive
+inline error _and_ triggers `refreshMandate` in a `finally` block, so the card's controls re-derive
 from fresh chain state rather than staying stale — the task's explicit "refresh and explain, don't
 just error out" requirement.
 
@@ -428,55 +428,44 @@ skip path.
 
 The merchant dashboard (PLAN.md §16.3: Products, Checkout links, Active mandates, Upcoming/Failed
 collections, Payments, Refunds, Developers, Webhooks) is architecturally the opposite of Phases
-10-11's consumer checkout/dashboard: those are entirely client-side (browser wallet signs directly
-against Soroban RPC, no secret ever exists), while every merchant view is authenticated with a
-**merchant API key** that must never reach client-side JavaScript (this phase's lead decision #1).
-That constraint drives every layering choice below.
+10-11's consumer checkout/dashboard: those are entirely client-side, while merchant onboarding
+first proves ownership of the settlement wallet with a single-use signed-message challenge. The
+API then issues a 24-hour opaque dashboard session. Optional scoped API keys are separate
+server-to-server integration credentials.
 
-### The API-key boundary: `server-only`, not just convention
+### The merchant-credential boundary: `server-only`, not just convention
 
 `lib/merchant-session.ts` (httpOnly cookie read/write) and `lib/merchant-api.ts` (the typed
 `/v1/*` client) both start with `import "server-only"` — the real npm package that makes `next
 build` fail outright if any `"use client"` file ever imports either module, transitively or not.
 This turns "the key never leaks client-side" from a code-review hope into a build-time guarantee.
 `lib/no-secret-leak.test.ts` adds a second, faster proof: it statically scans every Client
-Component under `app/merchant/**`/`components/merchant/**` for a *value* import (not a type-only
+Component under `app/merchant/**`/`components/merchant/**` for a _value_ import (not a type-only
 one, which is erased and harmless — the same distinction `tasks/lessons.md` already documents for
 this repo's other server-only-adjacent barrels) of either module, so a violation is caught by
 `pnpm test` without waiting for a full `next build`.
 
-The key itself lives only in an httpOnly, `sameSite: "lax"` cookie
-(`MERCHANT_API_KEY_COOKIE`) — there is no merchant login system in this MVP (no email/password,
-no OAuth); the API key *is* the identity, exactly as `apps/api`'s own auth already models it. A
-merchant either creates a new account (`POST /v1/merchants`, unauthenticated bootstrap) or pastes
-an existing key back in (`/merchant/connect`'s "Already have an API key" form, which verifies the
-key with a real authenticated call before storing it, so a stale/revoked key fails immediately
-with a clear error rather than silently breaking every later page).
+The opaque session lives only in an httpOnly, `sameSite: "lax"` cookie
+(`MERCHANT_SESSION_COOKIE`). `/merchant/connect` asks Freighter to connect, verifies the configured
+Stellar network, signs the exact server challenge, and creates or restores the merchant profile
+bound to that address. No manually typed payout address and no API-key login remain.
 
 ### Server Components read, Server Actions write
 
 Every `app/merchant/**/page.tsx` (except `connect/page.tsx` itself) is an `async` Server Component
-that calls `requireMerchantApiKey()` (`lib/merchant-guard.ts`, redirects to `/merchant/connect` if
+that calls `requireMerchantSession()` (`lib/merchant-guard.ts`, redirects to `/merchant/connect` if
 no cookie) and then fetches directly from `lib/merchant-api.ts` — no client-side `fetch` ever
 carries the `Authorization` header. Every mutation (`lib/merchant-actions.ts`) is a `"use server"`
 Server Action following one pattern: read the cookie server-side, validate, call the API, and
 return a discriminated `{ ok: true, ... } | { ok: false, error, fieldErrors? }` result for
-`useActionState` — `redirect()` is only ever called on the success path, *outside* any try/catch
+`useActionState` — `redirect()` is only ever called on the success path, _outside_ any try/catch
 (Next.js's redirect mechanism throws a special signal that a generic catch would otherwise
 swallow).
 
-### The "show a secret exactly once" pattern, and the bug it exposed
+### The "show a secret exactly once" pattern
 
-`createMerchantAction`/`rotateApiKeyAction`/`registerWebhookEndpointAction` all set a cookie (or
-persist a secret) *and* need to keep rendering the current page afterward, so the freshly issued
-value can be shown to the merchant exactly once (CLAUDE.md §10) — never a URL, never re-fetchable.
-This surfaced a real bug during development: `connect/page.tsx` originally redirected away the
-instant a session cookie was present, and Next.js re-renders a route's Server Components as part
-of the *same* action response when a Server Action mutates cookies — so `createMerchantAction`'s
-cookie write raced the client past the success view before anyone could ever see the key. Fixed by
-making `/merchant/connect` the one page that never guards on cookie presence (see its own module
-doc); every other page's guard is unaffected since none of them ever need to render a
-just-issued-secret success state.
+`createApiKeyAction` and `registerWebhookEndpointAction` render newly created integration/webhook
+secrets exactly once. Existing secrets remain hashed or encrypted and are never re-fetched.
 
 ### Reused, not duplicated, business logic
 
@@ -564,7 +553,7 @@ the already-decoded field name and an `ScvVec`/topics list into a plain array �
 hand-rolled XDR walking needed, just read fields by name. `decodeMandateLifecycleEvent` returns
 `undefined` for anything that isn't one of the 5 lifecycle events (including `charge_succeeded`/
 `refund_succeeded`, which already have producers and are out of this indexer's scope) and throws
-`MandateEventDecodeError` only when a *recognized* lifecycle event's shape doesn't match what
+`MandateEventDecodeError` only when a _recognized_ lifecycle event's shape doesn't match what
 `events.rs` publishes — a genuine ABI drift, not a skip-and-continue condition.
 `packages/contract-client/src/events.test.ts` proves this against fixtures built with
 `nativeToScVal`/`xdr.ScVal.scvMap` matching the macro's exact output shape, not hand-waved stand-ins.
@@ -632,7 +621,7 @@ backfilling a row for the first time).
 
 A dedicated `IndexerCursor` table (one global row, `prisma/schema.prisma` — see that model's doc
 comment), not a field on `MandateIndex`: the poll cursor is a single property of the whole contract's
-event stream, while `MandateIndex.lastIndexedLedger` is per-*mandate*. `cursor` is Soroban RPC's own
+event stream, while `MandateIndex.lastIndexedLedger` is per-_mandate_. `cursor` is Soroban RPC's own
 opaque continuation token (the actual resume position); `lastLedger` is a best-effort human-readable
 high-water mark used only for the gap check below, never for resuming pagination.
 
@@ -650,7 +639,7 @@ tuning for this phase's scope.
 1. A heuristic match on the `getEvents` call itself throwing an error whose message mentions common
    Soroban RPC wording for an invalid/pruned position (`"oldest ledger"`, `"cursor"`,
    `"start ledger"`, etc.) — best-effort and explicitly documented as such, since this repo's
-   contract was deployed only ~2 days before this indexer was built, so the *exact* error text a
+   contract was deployed only ~2 days before this indexer was built, so the _exact_ error text a
    genuinely 7-day-stale cursor produces has not been observed against live infrastructure.
 2. A **more robust, response-shape-independent** check: on every successful response, if the RPC's
    own `oldestLedger` has advanced past `storedCursor.lastLedger + 1`, ledgers in between were pruned
@@ -673,3 +662,47 @@ result: `mandate_created` (event id `0016545579823816704-0000000000`) and `manda
 `MandateIndex.status = "Paused"` and exactly one `mandate.active` + one `mandate.paused`
 `WebhookDelivery` row for the correct merchant — see `tasks/todo.md`'s Phase 12c `## Review` entry
 for the full transcript (mandate id, both real transaction hashes).
+
+---
+
+## Phase 15 — Demo topology
+
+```mermaid
+flowchart LR
+  merchant["Merchant dashboard / SDK"] --> api["Fastify merchant API"]
+  consumer["Consumer web + Wallets Kit"] --> registry["Soroban mandate registry"]
+  consumer --> sac["PUSD Stellar Asset Contract"]
+  api --> postgres[("Postgres workflow state")]
+  api --> redis[("Redis / BullMQ")]
+  redis --> relayer["Untrusted relayer"]
+  relayer --> registry
+  registry --> sac
+  registry -- "lifecycle events" --> indexer["Event indexer"]
+  indexer --> postgres
+  relayer --> webhooks["Signed webhook delivery"]
+  postgres --> timeline["Consumer transaction timeline"]
+```
+
+Trust direction is one-way: browser/API/DB/relayer can request actions, but only the contract
+decides mandate status, amount/time limits, replay protection, and destination. The demo seed
+creates public testnet identities and DB records; `pnpm demo:scenes` uses the production pipeline
+with an explicit demo-only merchant signer seam, then proves success, over-limit rejection,
+revocation, and post-revocation rejection in that order.
+
+---
+
+## Phase 16 — Production authorization and operations
+
+Charge creation is a two-step capability handoff:
+
+1. API fixes charge ID, mandate, amount, invoice hash, schedule, contract, network, nonce, and
+   expiry in an unsigned Soroban authorization entry.
+2. Merchant wallet/backend signs that entry; the API verifies the signature and exact invocation,
+   encrypts the signed XDR, and atomically schedules one `ChargeRequest`.
+3. Relayer decrypts and attaches the entry, simulates the exact transaction, verifies the receipt,
+   and signs only the transaction envelope with its own funded key.
+
+The relayer never receives a merchant seed. The authorization cannot be reused for another charge,
+amount, contract, network, or invocation. Prometheus scrapes API/relayer metrics into persistent
+storage; Alertmanager evaluates versioned rules; Grafana reads Prometheus on Render's private
+network. API keys are route-scoped and remain merchant-isolated.

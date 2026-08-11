@@ -6,15 +6,22 @@
     "node": ">=22"
   },
   "scripts": {
+    "start": "set -a && . ./.env && set +a && pnpm --parallel --filter @paymap/api --filter @paymap/relayer --filter @paymap/web start",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "build": "turbo run build",
     "test": "turbo run test",
     "test:e2e": "turbo run test:e2e",
-    "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "test:e2e:system": "SYSTEM_E2E_TESTNET=1 pnpm --filter @paymap/web test:e2e:system",
+    "security:audit": "pnpm --filter @paymap/scripts security:audit",
+    "prisma:validate": "node scripts/validate-prisma.mjs",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate:dev": "prisma migrate dev --schema prisma/schema.prisma",
-    "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma"
+    "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
+    "demo:setup": "pnpm --filter @paymap/scripts demo:env && set -a && . ./.env && set +a && docker compose up -d && pnpm prisma:migrate:deploy && pnpm build && pnpm demo:seed",
+    "demo:seed": "set -a && . ./.env && set +a && pnpm --filter @paymap/scripts demo:seed",
+    "demo:scenes": "set -a && . ./.env && set +a && pnpm --filter @paymap/scripts demo:scenes",
+    "test:load:staging": "pnpm --filter @paymap/scripts load:staging"
   },
   "prettier": "@paymap/config/prettier",
   "devDependencies": {

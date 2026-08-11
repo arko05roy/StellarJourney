@@ -1,0 +1,127 @@
+groups:
+  - name: paymap-production-readiness
+    rules:
+      - alert: PaymapServiceDown
+        expr: up{job=~"paymap-api|paymap-relayer"} == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is unreachable"
+
+      - alert: PaymapApiErrorRateHigh
+        expr: |
+          sum(rate(paymap_api_requests_total{status_class="5xx"}[10m]))
+          /
+          clamp_min(sum(rate(paymap_api_requests_total[10m])), 0.001)
+          > 0.05
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 5xx rate exceeds 5%"
+
+      - alert: PaymapApiKeyRejectionsHigh
+        expr: sum(increase(paymap_api_auth_rejections_total[10m])) > 20
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API-key rejection volume is elevated"
+
+      - alert: PaymapChargeFailureRateHigh
+        expr: |
+          sum(rate(paymap_charge_attempts_total{outcome="failure"}[15m]))
+          /
+          clamp_min(sum(rate(paymap_charge_attempts_total[15m])), 0.001)
+          > 0.10
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Charge failure rate exceeds 10%"
+
+      - alert: PaymapAuthorizationFailures
+        expr: |
+          sum(increase(paymap_charge_attempts_total{
+            reason=~"MERCHANT_AUTHORIZATION_MISSING|MERCHANT_AUTHORIZATION_EXPIRED"
+          }[15m])) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Merchant authorization transport failure detected"
+
+      - alert: PaymapRpcLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(paymap_rpc_request_seconds_bucket[10m])) by (le)
+          ) > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Soroban RPC p95 latency exceeds 5 seconds"
+
+      - alert: PaymapSettlementLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(paymap_charge_settlement_seconds_bucket[15m])) by (le)
+          ) > 60
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Charge settlement p95 exceeds 60 seconds"
+
+      - alert: PaymapWebhookFailuresHigh
+        expr: |
+          sum(rate(paymap_webhook_deliveries_total{outcome="failure"}[15m]))
+          /
+          clamp_min(sum(rate(paymap_webhook_deliveries_total[15m])), 0.001)
+          > 0.20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook failure rate exceeds 20%"
+
+      - alert: PaymapWebhookDeadLetters
+        expr: paymap_webhook_dead_letters > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Webhook dead-letter queue is non-empty"
+
+      - alert: PaymapChargeQueueBacklog
+        expr: paymap_charge_queue_depth > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Charge queue depth exceeds 100"
+
+      - alert: PaymapSubmittedChargeStuck
+        expr: paymap_stuck_submitted_charges > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A submitted charge requires ledger reconciliation"
+
+      - alert: PaymapIndexerLag
+        expr: paymap_indexer_lag_ledgers > 120
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Indexer is more than 120 ledgers behind"
+
+      - alert: PaymapIndexerRetentionGap
+        expr: increase(paymap_indexer_retention_gaps_total[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Indexer cursor fell outside RPC event retention"

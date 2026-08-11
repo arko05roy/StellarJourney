@@ -10,7 +10,11 @@ import {
   toDomainRefundReceipt,
   type AmountRule,
 } from "./domain.js";
-import type { Mandate as GenMandate, PaymentReceipt as GenPaymentReceipt, RefundReceipt as GenRefundReceipt } from "./generated/mandate-registry.js";
+import type {
+  Mandate as GenMandate,
+  PaymentReceipt as GenPaymentReceipt,
+  RefundReceipt as GenRefundReceipt,
+} from "./generated/mandate-registry.js";
 
 const HEX_A = "aa".repeat(32);
 const HEX_B = "bb".repeat(32);
@@ -49,8 +53,14 @@ describe("AmountRule domain <-> generated round-trip", () => {
   }
 
   it("maps the generated tuple-variant tag correctly", () => {
-    expect(toDomainAmountRule({ tag: "Fixed", values: [42n] })).toEqual({ kind: "fixed", amount: 42n });
-    expect(toDomainAmountRule({ tag: "Variable", values: [42n] })).toEqual({ kind: "variable", maxPerCharge: 42n });
+    expect(toDomainAmountRule({ tag: "Fixed", values: [42n] })).toEqual({
+      kind: "fixed",
+      amount: 42n,
+    });
+    expect(toDomainAmountRule({ tag: "Variable", values: [42n] })).toEqual({
+      kind: "variable",
+      maxPerCharge: 42n,
+    });
   });
 });
 
@@ -138,6 +148,32 @@ describe("toDomainMandate", () => {
       created_at: 0n,
       metadata_hash: Buffer.from(HEX_B, "hex"),
     };
+    expect(toDomainMandate(generated).lastChargedAt).toBeUndefined();
+  });
+
+  it("normalizes the live SDK's null Option::None to undefined", () => {
+    const generated: GenMandate = {
+      id: Buffer.from(HEX_A, "hex"),
+      payer: "G...",
+      merchant: "G...",
+      asset: "C...",
+      status: { tag: "Active", values: undefined },
+      amount_rule: { tag: "Fixed", values: [1n] },
+      max_per_period: 1n,
+      period_seconds: 1n,
+      min_interval_seconds: 0n,
+      start_at: 0n,
+      expires_at: 2n,
+      max_successful_charges: 1,
+      successful_charges: 0,
+      total_collected: 0n,
+      current_period_start: 0n,
+      current_period_collected: 0n,
+      last_charged_at: null as unknown as undefined,
+      created_at: 0n,
+      metadata_hash: Buffer.from(HEX_B, "hex"),
+    };
+
     expect(toDomainMandate(generated).lastChargedAt).toBeUndefined();
   });
 });

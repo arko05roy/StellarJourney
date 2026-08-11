@@ -62,6 +62,9 @@ importers:
       fastify:
         specifier: ^5.2.1
         version: 5.10.0
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -105,6 +108,9 @@ importers:
       ioredis:
         specifier: ^5.4.2
         version: 5.11.1
+      prom-client:
+        specifier: ^15.1.3
+        version: 15.1.3
       undici:
         specifier: ^7.2.0
         version: 7.29.0
@@ -130,6 +136,9 @@ importers:
       '@creit.tech/stellar-wallets-kit':
         specifier: ^2.5.0
         version: 2.5.0(@trezor/connect@9.7.3(@solana/sysvars@5.5.1(fastestsmallesttextencoderdecoder@1.0.22)(typescript@5.9.3))(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(tslib@2.8.1)(typescript@5.9.3)(utf-8-validate@6.0.6)(ws@8.21.0(bufferutil@4.1.0)(utf-8-validate@6.0.6)))(@types/react@19.2.17)(bufferutil@4.1.0)(fastestsmallesttextencoderdecoder@1.0.22)(ioredis@5.11.1)(near-api-js@5.1.1)(react@19.2.8)(tslib@2.8.1)(typescript@5.9.3)(use-sync-external-store@1.6.0(react@19.2.8))(utf-8-validate@6.0.6)(zod@3.25.76)
+      '@gsap/react':
+        specifier: ^2.1.2
+        version: 2.1.2(gsap@3.15.0)(react@19.2.8)
       '@paymap/contract-client':
         specifier: workspace:*
         version: link:../../packages/contract-client
@@ -139,6 +148,9 @@ importers:
       '@paymap/stellar':
         specifier: workspace:*
         version: link:../../packages/stellar
+      '@stellar/freighter-api':
+        specifier: ^6.0.0
+        version: 6.0.0
       '@stellar/stellar-sdk':
         specifier: ^16.1.0
         version: 16.1.0
@@ -148,12 +160,15 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      gsap:
+        specifier: ^3.15.0
+        version: 3.15.0
       lucide-react:
         specifier: ^1.27.0
         version: 1.27.0(react@19.2.8)
       next:
         specifier: ^15.1.4
-        version: 15.5.22(@babel/core@7.29.7)(@playwright/test@1.62.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+        version: 15.5.22(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@playwright/test@1.62.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       react:
         specifier: ^19.0.0
         version: 19.2.8
@@ -253,13 +268,16 @@ importers:
       '@paymap/shared':
         specifier: workspace:*
         version: link:../shared
+      '@paymap/stellar':
+        specifier: workspace:*
+        version: link:../stellar
+      '@stellar/stellar-sdk':
+        specifier: ^16.1.0
+        version: 16.1.0
     devDependencies:
       '@paymap/config':
         specifier: workspace:*
         version: link:../config
-      '@paymap/stellar':
-        specifier: workspace:*
-        version: link:../stellar
       '@types/node':
         specifier: ^22.10.5
         version: 22.20.1
@@ -1016,6 +1034,12 @@ packages:
   '@floating-ui/utils@0.2.12':
     resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
 
+  '@gsap/react@2.1.2':
+    resolution: {integrity: sha512-JqliybO1837UcgH2hVOM4VO+38APk3ECNrsuSM4MuXp+rbf+/2IG2K1YJiqfTcXQHH7XlA0m3ykniFYstfq0Iw==}
+    peerDependencies:
+      gsap: ^3.12.5
+      react: '>=17'
+
   '@hono/node-server@2.0.12':
     resolution: {integrity: sha512-eWpQYr67tqJLeaSUl0Q+TquuYfUdTibpOJlUMV2FfUP7+KqCC5TufnwnlXL6mobZBJbGAYRd7ZvEBDCbLInjhg==}
     engines: {node: '>=20'}
@@ -1440,6 +1464,10 @@ packages:
   '@nodelib/fs.walk@1.2.8':
     resolution: {integrity: sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg==}
     engines: {node: '>= 8'}
+
+  '@opentelemetry/api@1.9.1':
+    resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
+    engines: {node: '>=8.0.0'}
 
   '@phosphor-icons/webcomponents@2.1.5':
     resolution: {integrity: sha512-JcvQkZxvcX2jK+QCclm8+e8HXqtdFW9xV4/kk2aL9Y3dJA2oQVt+pzbv1orkumz3rfx4K9mn9fDoMr1He1yr7Q==}
@@ -3171,6 +3199,9 @@ packages:
   bindings@1.5.0:
     resolution: {integrity: sha512-p2q/t/mhvuOj/UeLlV6566GD/guowlr0hHxClI0W9m7MWYkL1F0hLo+0Aexs9HSPCtR1SXQ0TD3MMKrXZajbiQ==}
 
+  bintrees@1.0.2:
+    resolution: {integrity: sha512-VOMgTMwjAaUG580SXn3LacVgjurrbMme7ZZNYGSSV7mmtY6QQRh0Eg3pwIcntQ77DErK1L0NxkbetjcoXzVwKw==}
+
   bip32-path@0.4.2:
     resolution: {integrity: sha512-ZBMCELjJfcNMkz5bDuJ1WrYvjlhEF5k6mQ8vUr4N7MbVRsXei7ZOg8VhhwMfNiW68NWmLkgkc6WvTickrLGprQ==}
 
@@ -4101,6 +4132,9 @@ packages:
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
+
+  gsap@3.15.0:
+    resolution: {integrity: sha512-dMW4CWBTUK1AEEDeZc1g4xpPGIrSf9fJF960qbTZmN/QwZIWY5wgliS6JWl9/25fpTGJrMRtSjGtOmPnfjZB+A==}
 
   h3@1.15.11:
     resolution: {integrity: sha512-L3THSe2MPeBwgIZVSH5zLdBBU90TOxarvhK9d04IDY2AmVS8j2Jz2LIWtwsGOU3lu2I5jCN7FNvVfY2+XyF+mg==}
@@ -5106,6 +5140,10 @@ packages:
   process-warning@5.0.0:
     resolution: {integrity: sha512-a39t9ApHNx2L4+HBnQKqxxHNs1r7KF+Intd8Q/g1bUh6q0WIp9voPXJ/x0j+ZL45KF1pJd9+q2jLIRMfvEshkA==}
 
+  prom-client@15.1.3:
+    resolution: {integrity: sha512-6ZiOBfCywsD4k1BN9IX0uZhF+tJkV8q8llP64G5Hajs4JOeVLPCwpPVcpXy3BwYiUGgyJzsJJQeOIv7+hDSq8g==}
+    engines: {node: ^16 || ^18 || >=20}
+
   prompts@2.4.2:
     resolution: {integrity: sha512-NxNv/kLguCA7p3jE8oL2aEBsrJWgAakBpgmgK6lpPWV+WuOmY6r2/zbAVnP+T8bQlA0nzHXSJSJW0Hq7ylaD2Q==}
     engines: {node: '>= 6'}
@@ -5588,6 +5626,9 @@ packages:
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
+
+  tdigest@0.1.2:
+    resolution: {integrity: sha512-+G0LLgjjo9BZX2MfdvPfH+MKLCrxlXSYec5DaPYP1fe6Iyhf0/fSmJ0bFiZ1F8BT6cGXl2LpltQptzjXKWEkKA==}
 
   text-encoding-utf-8@1.0.2:
     resolution: {integrity: sha512-8bw4MY9WjdsD2aMtO0OzOCY3pXGYNx2d2FfHRVUKkiCPDWjKuOlhLVASS+pD7VkLTVjW268LYJHwsnPFlBpbAg==}
@@ -6876,6 +6917,11 @@ snapshots:
 
   '@floating-ui/utils@0.2.12': {}
 
+  '@gsap/react@2.1.2(gsap@3.15.0)(react@19.2.8)':
+    dependencies:
+      gsap: 3.15.0
+      react: 19.2.8
+
   '@hono/node-server@2.0.12(hono@4.12.32)':
     dependencies:
       hono: 4.12.32
@@ -7297,6 +7343,8 @@ snapshots:
     dependencies:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
+
+  '@opentelemetry/api@1.9.1': {}
 
   '@phosphor-icons/webcomponents@2.1.5':
     dependencies:
@@ -10074,6 +10122,8 @@ snapshots:
     dependencies:
       file-uri-to-path: 1.0.0
 
+  bintrees@1.0.2: {}
+
   bip32-path@0.4.2: {}
 
   bip66@2.0.0: {}
@@ -11125,6 +11175,8 @@ snapshots:
 
   graceful-fs@4.2.11: {}
 
+  gsap@3.15.0: {}
+
   h3@1.15.11:
     dependencies:
       cookie-es: 1.2.3
@@ -11716,7 +11768,7 @@ snapshots:
 
   negotiator@1.0.0: {}
 
-  next@15.5.22(@babel/core@7.29.7)(@playwright/test@1.62.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
+  next@15.5.22(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@playwright/test@1.62.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8):
     dependencies:
       '@next/env': 15.5.22
       '@swc/helpers': 0.5.15
@@ -11734,6 +11786,7 @@ snapshots:
       '@next/swc-linux-x64-musl': 15.5.22
       '@next/swc-win32-arm64-msvc': 15.5.22
       '@next/swc-win32-x64-msvc': 15.5.22
+      '@opentelemetry/api': 1.9.1
       '@playwright/test': 1.62.0
       sharp: 0.34.5
     transitivePeerDependencies:
@@ -12114,6 +12167,11 @@ snapshots:
   process-warning@4.0.1: {}
 
   process-warning@5.0.0: {}
+
+  prom-client@15.1.3:
+    dependencies:
+      '@opentelemetry/api': 1.9.1
+      tdigest: 0.1.2
 
   prompts@2.4.2:
     dependencies:
@@ -12716,6 +12774,10 @@ snapshots:
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
+
+  tdigest@0.1.2:
+    dependencies:
+      bintrees: 1.0.2
 
   text-encoding-utf-8@1.0.2: {}
 

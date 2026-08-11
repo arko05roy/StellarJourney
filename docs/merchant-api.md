@@ -1,7 +1,7 @@
 # Merchant API
 
-Phase 8 (core endpoints), extended in Phase 12a (webhook registration + delivery, `@paymap/sdk`)
-and Phase 12b (the merchant dashboard's list endpoints, `apps/web`'s `/merchant/**`).
+Phase 8 (core endpoints), extended in Phase 12a (webhook registration + delivery, `@paymap/sdk`),
+Phase 12b (dashboard lists), and Phase 16 (scoped keys and non-custodial charge authorization).
 Base URL (local): `http://localhost:3001`. All endpoints are versioned under `/v1`.
 
 The contract is the policy authority (CLAUDE.md §1). This API is a workflow layer around it: it
@@ -11,10 +11,17 @@ confirmed on-chain result.
 
 ## Scope note: endpoints beyond PLAN.md §14's literal list
 
-PLAN.md §14 lists ten endpoints. Ten more exist and are documented here:
+PLAN.md §14 lists ten endpoints. Authentication, key-management, webhook, and dashboard-list
+endpoints also exist:
 
 ```text
-POST   /v1/merchants                       (bootstrap: create a merchant + first API key)
+POST   /v1/merchant-auth/challenges        (single-use wallet ownership challenge)
+POST   /v1/merchant-auth/complete          (verify signature + issue dashboard session)
+POST   /v1/merchant-auth/register          (create profile for a verified wallet)
+POST   /v1/merchant-auth/logout            (revoke dashboard session)
+GET    /v1/merchants/me/api-keys           (list integration keys)
+POST   /v1/merchants/me/api-keys           (create a scoped integration key)
+DELETE /v1/merchants/me/api-keys/:id       (revoke an integration key)
 POST   /v1/merchants/me/api-keys/rotate    (rotate: issue a new key, revoke the old one)
 POST   /v1/webhook-endpoints               (Phase 12a: register/rotate the real delivery URL + secret)
 GET    /v1/webhook-endpoints               (Phase 12a: status read, never the secret)
@@ -26,33 +33,55 @@ GET    /v1/refunds                         (Phase 12b: merchant's refund-request
 GET    /v1/webhook-deliveries              (Phase 12b: merchant's webhook delivery history)
 ```
 
-The first two exist because CLAUDE.md §10 explicitly requires API-key **issuance** and
-**rotation**, with the full key shown exactly once, and there is no way to obtain the first key
-without *some* endpoint. The webhook-endpoints pair exists because real signed delivery
+Human merchant authentication is deliberately separate from integration credentials: wallet
+ownership creates a short-lived dashboard session, while API keys are optional, scoped, and
+created afterward under Developers. The webhook-endpoints pair exists because real signed delivery
 (CLAUDE.md §12) needs somewhere to register a URL and secret — `PLAN.md §14`'s
 `POST /v1/webhook-endpoints/test` alone only ever validated a candidate URL, it never persisted
 one. The six Phase 12b `GET .../` list endpoints exist because PLAN.md §14 only ever specifies
 single-resource reads (`GET /v1/mandates/:id`, `GET /v1/charges/:id`) or a payments list scoped by
 `mandateId` — none of that is enough to render PLAN.md §16.3's merchant dashboard views (Products,
 Checkout links, Active mandates, Upcoming/Failed collections, Refunds, Webhooks), which need a
-merchant-scoped *list* of each resource. Each one mirrors an existing single-resource read's
+merchant-scoped _list_ of each resource. Each one mirrors an existing single-resource read's
 auth/ownership rules exactly, just without the `:id`. Everything else matches PLAN.md §14 exactly.
 
 ## Authentication
 
-Every endpoint except `POST /v1/merchants` requires:
+The challenge and completion endpoints are public but rate-limited. Completion succeeds only for
+the exact, unexpired, unused message signed by the requested Stellar account.
+
+Dashboard requests use:
 
 ```text
-Authorization: Bearer <api key>
+Authorization: Bearer pms_live_<opaque session>
 ```
 
-API keys look like `sk_live_<random>`. They are **hashed at rest** with HMAC-SHA256, using
+Sessions expire after 24 hours, are revocable, and are stored hashed at rest. They authorize a
+human dashboard session only; they are not API keys.
+
+Server integrations use `Authorization: Bearer sk_live_<random>`. API keys are **hashed at rest** with HMAC-SHA256, using
 `API_KEY_HASH_SECRET` as the pepper (never a bare hash — the secret must matter, or a stolen
 database dump alone would be dictionary-attackable). Verification is a constant-time comparison
 of the full digest (`node:crypto`'s `timingSafeEqual`), not a substring/prefix check.
 
-The **full key is shown exactly once** — at creation, and again at rotation. It is never stored
+The **full API key is shown exactly once** — at creation, and again at legacy rotation. It is never stored
 in recoverable form and never returned by any other endpoint.
+
+### Scoped keys
+
+Keys carry immutable scopes:
+
+```text
+products:read products:write checkout_sessions:read checkout_sessions:write
+mandates:read charges:read charges:write payments:read refunds:read refunds:write
+webhooks:read webhooks:write api_keys:manage
+```
+
+New merchants receive no API key automatically. A wallet session or a key with
+`api_keys:manage` can list, create, and revoke merchant keys. Missing permission returns
+`403 INSUFFICIENT_SCOPE` before resource lookup.
+`POST /v1/merchants/me/api-keys`, `GET /v1/merchants/me/api-keys`, and
+`DELETE /v1/merchants/me/api-keys/:id` manage keys; a key cannot revoke itself.
 
 ### Key rotation
 
@@ -74,12 +103,19 @@ a window with zero or two active keys. Any request using the old key after this 
 
 ### Auth error codes
 
-| Code | HTTP | Meaning |
-| --- | --- | --- |
-| `MISSING_API_KEY` | 401 | No `Authorization` header, or not `Bearer <key>` shaped. |
-| `INVALID_API_KEY` | 401 | Header present but no stored key hash matches. |
-| `API_KEY_REVOKED` | 401 | The hash matches a key that has since been rotated out. |
-| `MERCHANT_DISABLED` | 403 | The key is valid but the merchant account itself is disabled. |
+| Code                       | HTTP | Meaning                                                       |
+| -------------------------- | ---- | ------------------------------------------------------------- |
+| `MISSING_API_KEY`          | 401  | No `Authorization` header, or not `Bearer <key>` shaped.      |
+| `INVALID_API_KEY`          | 401  | Header present but no stored key hash matches.                |
+| `API_KEY_REVOKED`          | 401  | The hash matches a key that has since been rotated out.       |
+| `INVALID_MERCHANT_SESSION` | 401  | Dashboard session token is malformed or unknown.              |
+| `MERCHANT_SESSION_EXPIRED` | 401  | Dashboard session expired or was revoked.                     |
+| `INVALID_AUTH_CHALLENGE`   | 401  | Wallet challenge is missing or altered.                       |
+| `AUTH_CHALLENGE_EXPIRED`   | 401  | Wallet challenge exceeded its five-minute lifetime.           |
+| `INVALID_WALLET_SIGNATURE` | 401  | Signature does not verify for the connected account.          |
+| `WALLET_ADDRESS_MISMATCH`  | 401  | A different wallet signed the challenge.                      |
+| `MERCHANT_DISABLED`        | 403  | The key is valid but the merchant account itself is disabled. |
+| `INSUFFICIENT_SCOPE`       | 403  | The key lacks a scope required by the route.                  |
 
 ## Idempotency
 
@@ -87,7 +123,7 @@ Required (`Idempotency-Key` header) on:
 
 ```text
 POST /v1/checkout-sessions
-POST /v1/mandates/:id/charges
+POST /v1/mandates/:id/charge-authorizations
 POST /v1/payments/:id/refunds
 ```
 
@@ -98,7 +134,10 @@ the original response verbatim (including the original HTTP status) — the side
 never runs twice. The same key with a **different** body is rejected:
 
 ```json
-{ "code": "IDEMPOTENCY_KEY_REUSED", "message": "This Idempotency-Key was already used with a different request body." }
+{
+  "code": "IDEMPOTENCY_KEY_REUSED",
+  "message": "This Idempotency-Key was already used with a different request body."
+}
 ```
 
 **Concurrency safety:** one Postgres transaction wraps the idempotency-record insert, the
@@ -108,7 +147,7 @@ the already-completed row and replays it — never a second execution, never a h
 See `apps/api/src/idempotency/middleware.ts`'s module doc for the exact mechanism (including why a
 naive `catch` around a failed insert does not work — it poisons the enclosing transaction).
 
-A request rejected by validation or the on-chain precheck *before* idempotency is invoked (e.g. a
+A request rejected by validation or the on-chain precheck _before_ idempotency is invoked (e.g. a
 revoked mandate) is not cached — a retry re-validates from scratch, which is strictly more correct
 than replaying a stale verdict.
 
@@ -125,45 +164,48 @@ contract's own error name verbatim (CLAUDE.md §8) — never a generic `INTERNAL
 
 ### Contract error → HTTP status
 
-| Contract code | HTTP | Retryable (relayer) |
-| --- | --- | --- |
-| `MandateNotFound` | 404 | no |
-| `MandateNotActive` | 409 | no |
-| `MandatePaused` | 409 | no |
-| `MandateRevoked` | 409 | no |
-| `MandateCompleted` | 409 | no |
-| `MandateExpired` | 409 | no |
-| `ChargeBeforeStart` | 409 | no |
-| `ChargeTooSoon` | 409 | no |
-| `InvalidAmount` | 422 | no |
-| `AmountExceedsChargeLimit` | 422 | no |
-| `AmountExceedsPeriodLimit` | 422 | no |
-| `ChargeCountExceeded` | 409 | no |
-| `DuplicateCharge` | 409 | no |
-| `UnauthorizedMerchant` | 403 | no |
-| `InsufficientAllowance` | 402 | yes (merchant policy) |
-| `InsufficientBalance` | 402 | yes (merchant policy) |
-| `PaymentNotFound` | 404 | no |
-| `RefundExceedsPayment` | 422 | no |
-| `DuplicateRefund` | 409 | no |
-| `ArithmeticOverflow` | 500 | no |
-| `InvalidMandateInput` | 400 | no |
-| `DuplicateMandate` | 409 | no |
-| `InvalidStateTransition` | 409 | no |
-| `RefundNotFound` | 404 | no |
+| Contract code              | HTTP | Retryable (relayer)   |
+| -------------------------- | ---- | --------------------- |
+| `MandateNotFound`          | 404  | no                    |
+| `MandateNotActive`         | 409  | no                    |
+| `MandatePaused`            | 409  | no                    |
+| `MandateRevoked`           | 409  | no                    |
+| `MandateCompleted`         | 409  | no                    |
+| `MandateExpired`           | 409  | no                    |
+| `ChargeBeforeStart`        | 409  | no                    |
+| `ChargeTooSoon`            | 409  | no                    |
+| `InvalidAmount`            | 422  | no                    |
+| `AmountExceedsChargeLimit` | 422  | no                    |
+| `AmountExceedsPeriodLimit` | 422  | no                    |
+| `ChargeCountExceeded`      | 409  | no                    |
+| `DuplicateCharge`          | 409  | no                    |
+| `UnauthorizedMerchant`     | 403  | no                    |
+| `InsufficientAllowance`    | 402  | yes (merchant policy) |
+| `InsufficientBalance`      | 402  | yes (merchant policy) |
+| `PaymentNotFound`          | 404  | no                    |
+| `RefundExceedsPayment`     | 422  | no                    |
+| `DuplicateRefund`          | 409  | no                    |
+| `ArithmeticOverflow`       | 500  | no                    |
+| `InvalidMandateInput`      | 400  | no                    |
+| `DuplicateMandate`         | 409  | no                    |
+| `InvalidStateTransition`   | 409  | no                    |
+| `RefundNotFound`           | 404  | no                    |
 
 ### Other stable codes
 
-| Code | HTTP | Where |
-| --- | --- | --- |
-| `VALIDATION_ERROR` | 400 | any endpoint — Zod rejection, `details` lists each issue |
-| `MISSING_IDEMPOTENCY_KEY` | 400 | the three idempotent POSTs |
-| `IDEMPOTENCY_KEY_REUSED` | 409 | same key, different body |
-| `INVALID_AMOUNT` | 400 | decimal→base-unit conversion failure (zero, over-precision, malformed) |
-| `MANDATE_NOT_LINKED_TO_PRODUCT` | 404 | charge/refund on a mandate with no checkout-session/product to resolve `decimals` from |
-| `RATE_LIMITED` | 429 | rate-limited endpoints |
-| `PRODUCT_NOT_FOUND`, `CHECKOUT_SESSION_NOT_FOUND`, `CHARGE_REQUEST_NOT_FOUND` | 404 | resource not found or not owned by this merchant |
-| `INTERNAL_ERROR` | 500 | genuinely unexpected failure only |
+| Code                                                                          | HTTP | Where                                                                                  |
+| ----------------------------------------------------------------------------- | ---- | -------------------------------------------------------------------------------------- |
+| `VALIDATION_ERROR`                                                            | 400  | any endpoint — Zod rejection, `details` lists each issue                               |
+| `MISSING_IDEMPOTENCY_KEY`                                                     | 400  | the three idempotent POSTs                                                             |
+| `IDEMPOTENCY_KEY_REUSED`                                                      | 409  | same key, different body                                                               |
+| `INVALID_AMOUNT`                                                              | 400  | decimal→base-unit conversion failure (zero, over-precision, malformed)                 |
+| `MANDATE_NOT_LINKED_TO_PRODUCT`                                               | 404  | charge/refund on a mandate with no checkout-session/product to resolve `decimals` from |
+| `RATE_LIMITED`                                                                | 429  | rate-limited endpoints                                                                 |
+| `PRODUCT_NOT_FOUND`, `CHECKOUT_SESSION_NOT_FOUND`, `CHARGE_REQUEST_NOT_FOUND` | 404  | resource not found or not owned by this merchant                                       |
+| `INTERNAL_ERROR`                                                              | 500  | genuinely unexpected failure only                                                      |
+| `MERCHANT_AUTHORIZATION_REQUIRED`                                             | 409  | legacy direct charge creation is disabled                                              |
+| `INVALID_CHARGE_AUTHORIZATION`                                                | 400  | signed auth entry fails exact invocation/signature checks                              |
+| `SCHEDULE_EXCEEDS_AUTHORIZATION_TTL`                                          | 400  | requested schedule exceeds bounded auth-entry lifetime                                 |
 
 `MandateNotFound` is also returned (never a distinct "forbidden" code) when a mandate exists but
 belongs to a different merchant — this API never reveals a mandate's existence to a merchant that
@@ -176,18 +218,19 @@ units via `@paymap/shared`'s `decimalToBaseUnits`/`baseUnitsToDecimalString` usi
 declared `decimals` — set once, on the `Product`. Zero, negative, malformed, and over-precision
 amounts are all rejected, never rounded. Every timestamp is ISO 8601, UTC.
 
-`GET /v1/mandates/:id` is the one exception: it reflects live on-chain state for *any* asset, not
+`GET /v1/mandates/:id` is the one exception: it reflects live on-chain state for _any_ asset, not
 only ones this API's own `Product` catalog knows the decimals for, so its amount fields are named
 `*BaseUnits` and returned as plain integer strings rather than formatted decimals.
 
 ## Rate limits
 
-| Endpoint | Limit |
-| --- | --- |
-| `POST /v1/merchants` | 5 / minute |
-| `POST /v1/merchants/me/api-keys/rotate` | 5 / minute |
-| `POST /v1/mandates/:id/charges` | 30 / minute |
-| everything else | 1000 / minute (generous default) |
+| Endpoint                                | Limit                            |
+| --------------------------------------- | -------------------------------- |
+| merchant auth challenge/complete        | 10 / minute                      |
+| merchant profile registration           | 5 / minute                       |
+| `POST /v1/merchants/me/api-keys/rotate` | 5 / minute                       |
+| charge authorization create/complete    | 30 / minute                      |
+| everything else                         | 1000 / minute (generous default) |
 
 All limits are IP-keyed (a documented MVP simplification — merchant-scoped limiting is a future
 refinement, not required for this phase).
@@ -196,21 +239,18 @@ refinement, not required for this phase).
 
 ## Endpoints
 
-### `POST /v1/merchants`
+### Merchant wallet authentication
 
-No authentication (this *is* the bootstrap). Rate-limited.
+1. `POST /v1/merchant-auth/challenges` with `{ "walletAddress": "G..." }`.
+2. Sign the returned exact `message` with Freighter `signMessage`.
+3. `POST /v1/merchant-auth/complete` with the challenge id, message, base64 signature, and signer.
+4. Store the returned `pms_live_...` session only in an httpOnly cookie.
+5. When `profileRequired` is true, call `POST /v1/merchant-auth/register` with the session and
+   business name.
 
-```json
-{ "name": "Acme Inc", "walletAddress": "GABC...5EQQ" }
-```
-
-→ `201`
-
-```json
-{ "merchantId": "…", "name": "Acme Inc", "walletAddress": "GABC...5EQQ", "apiKeyId": "…", "apiKey": "sk_live_…" }
-```
-
-`apiKey` is shown once, here.
+Challenges expire after five minutes and are consumed atomically. The signed message binds the
+wallet, Stellar network passphrase, nonce, issue time, expiry, and Paymap authentication purpose.
+It does not submit a transaction or move funds.
 
 ### `POST /v1/products`
 
@@ -260,7 +300,14 @@ Requires `Idempotency-Key`.
 → `201`
 
 ```json
-{ "id": "…", "merchantId": "…", "productId": "…", "status": "pending", "expiresAt": "2026-…Z", "createdAt": "2026-…Z" }
+{
+  "id": "…",
+  "merchantId": "…",
+  "productId": "…",
+  "status": "pending",
+  "expiresAt": "2026-…Z",
+  "createdAt": "2026-…Z"
+}
 ```
 
 ### `GET /v1/checkout-sessions/:id`
@@ -292,7 +339,18 @@ webhook secret, or API key. `status` reflects the session's own expiry live (`ex
   "mandateId": "…",
   "payerAddress": "…",
   "merchant": { "name": "Acme Coffee Roasters", "walletAddress": "G…" },
-  "product": { "name": "…", "assetAddress": "C…", "assetDecimals": 7, "amountType": "fixed", "fixedAmount": "15.00", "maxPerPeriod": "15.00", "periodSeconds": 2592000, "minIntervalSeconds": 0, "maxSuccessfulCharges": 0, "defaultDurationSeconds": 31536000 }
+  "product": {
+    "name": "…",
+    "assetAddress": "C…",
+    "assetDecimals": 7,
+    "amountType": "fixed",
+    "fixedAmount": "15.00",
+    "maxPerPeriod": "15.00",
+    "periodSeconds": 2592000,
+    "minIntervalSeconds": 0,
+    "maxSuccessfulCharges": 0,
+    "defaultDurationSeconds": 31536000
+  }
 }
 ```
 
@@ -370,7 +428,7 @@ the `MandateIndex` cache and every row is then re-read live on-chain, exactly li
 A `live: false` row means the on-chain read failed for that one mandate (e.g. transient RPC
 trouble) — it degrades to the last-known cached status rather than failing the whole list.
 
-### `POST /v1/mandates/:id/charges`
+### `POST /v1/mandates/:id/charge-authorizations`
 
 Requires `Idempotency-Key`. Rate-limited (30/min).
 
@@ -382,25 +440,50 @@ Requires `Idempotency-Key`. Rate-limited (30/min).
 
 1. Resolves the mandate's asset `decimals` via the `Product` that originated it (a mandate must
    trace back to a `CheckoutSession`/`Product` created through this API — `404
-   MANDATE_NOT_LINKED_TO_PRODUCT` otherwise).
+MANDATE_NOT_LINKED_TO_PRODUCT` otherwise).
 2. Reads the mandate **on-chain**.
 3. Runs a fast precheck mirroring `contracts/mandate-registry/src/charge.rs`'s validation order
    (status, start/expiry, amount rule, min interval, max count, period cap) — a
    deterministically-doomed request (revoked, paused, over-limit, too soon, …) is rejected here,
    with the specific contract error code, and nothing is ever queued for it.
 
-Only then does it create a `ChargeRequest` row in `scheduled` — **it does not charge
-synchronously**. Phase 9's relayer drives it from there.
+Only then does it create a pending, single-use authorization challenge. The response contains the
+unsigned auth-entry XDR, signing preimage XDR, merchant address, contract, network, invocation
+display fields, and expiry ledger. It does not create a `ChargeRequest` yet.
 
 → `201`
 
 ```json
 {
-  "id": "…", "mandateId": "…", "chargeId": "<64 hex>", "amount": "15.00",
-  "invoiceHash": "<64 hex>", "scheduledFor": "2026-…Z", "status": "scheduled",
-  "attemptCount": 0, "createdAt": "2026-…Z"
+  "id": "…",
+  "mandateId": "…",
+  "chargeId": "<64 hex>",
+  "amount": "15.00",
+  "invoiceHash": "<64 hex>",
+  "scheduledFor": "2026-…Z",
+  "merchantAddress": "G…",
+  "contractId": "C…",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "signatureExpirationLedger": 123456,
+  "unsignedAuthorizationEntryXdr": "…",
+  "authorizationPreimageXdr": "…",
+  "status": "pending"
 }
 ```
+
+### `POST /v1/charge-authorizations/:id/complete`
+
+```json
+{ "signedAuthorizationEntryXdr": "…" }
+```
+
+The API cryptographically verifies the standard merchant signature and exact issued invocation,
+then encrypts the signed XDR and atomically creates the scheduled `ChargeRequest`. Repeating a
+successful completion returns the same request. The old `POST /v1/mandates/:id/charges` route
+always returns `409 MERCHANT_AUTHORIZATION_REQUIRED`.
+
+The SDK's `charges.create()` performs prepare → merchant `signAuthEntry` → complete as one client
+operation. Neither API nor relayer accepts or stores a merchant secret key.
 
 ### `GET /v1/charges/:id`
 
@@ -439,7 +522,14 @@ schedules.
 → `201`
 
 ```json
-{ "id": "…", "paymentId": "…", "refundId": "<64 hex>", "amount": "5.00", "status": "scheduled", "createdAt": "2026-…Z" }
+{
+  "id": "…",
+  "paymentId": "…",
+  "refundId": "<64 hex>",
+  "amount": "5.00",
+  "status": "scheduled",
+  "createdAt": "2026-…Z"
+}
 ```
 
 ### `GET /v1/refunds` (Phase 12b)
@@ -507,7 +597,15 @@ with `400 INVALID_STATUS_FILTER`), `limit` (default 50, max 100).
 ```json
 {
   "data": [
-    { "id": "…", "eventId": "<64 hex>", "eventType": "payment.succeeded", "status": "delivered", "attemptCount": 1, "createdAt": "2026-…Z", "updatedAt": "2026-…Z" }
+    {
+      "id": "…",
+      "eventId": "<64 hex>",
+      "eventType": "payment.succeeded",
+      "status": "delivered",
+      "attemptCount": 1,
+      "createdAt": "2026-…Z",
+      "updatedAt": "2026-…Z"
+    }
   ]
 }
 ```
@@ -532,21 +630,27 @@ Every delivered webhook shares this envelope, assembled fresh by the delivery wo
 retries — a receiver can safely dedupe on `eventId` alone):
 
 ```json
-{ "eventId": "…", "eventType": "payment.succeeded", "createdAt": "2026-…Z", "signatureVersion": "v1", "data": { "…": "…" } }
+{
+  "eventId": "…",
+  "eventType": "payment.succeeded",
+  "createdAt": "2026-…Z",
+  "signatureVersion": "v1",
+  "data": { "…": "…" }
+}
 ```
 
 ### Which events actually have a producer today
 
 This is the honest current state, not the aspirational one:
 
-| Event | Producer | Notes |
-| --- | --- | --- |
-| `payment.succeeded` | `apps/relayer`'s charge pipeline (Phase 9) | Enqueued in the same DB transaction as the `succeeded` transition. |
-| `payment.failed` | `apps/relayer`'s charge pipeline (Phase 9) | Enqueued on `permanently_failed` only — a `retry_scheduled` failure does not fire a webhook per attempt. |
-| `mandate.completed` | `apps/relayer`'s charge pipeline (Phase 12a) — **sole producer, see note below** | Detected without an event indexer: the pipeline already holds the *pre-charge* on-chain `Mandate` (fresh read, step 2) with `successfulCharges`/`maxSuccessfulCharges`; a successful charge that brings the count to exactly the max deterministically completed the mandate (the contract never allows a charge that would exceed it), so the webhook is enqueued alongside `payment.succeeded` in that case. |
-| `mandate.active` | `apps/relayer`'s on-chain event indexer (Phase 12c) | Indexes the contract's own `mandate_created` event — see below. |
-| `mandate.paused` / `mandate.resumed` / `mandate.revoked` | `apps/relayer`'s on-chain event indexer (Phase 12c) | Indexes `mandate_paused`/`mandate_resumed`/`mandate_revoked` — see below. |
-| `refund.succeeded` | **none** | `POST /v1/payments/:id/refunds` only ever creates a `RefundRequest` row in `scheduled` (see that endpoint's docs above) — no relayer pipeline exists yet that actually submits a `refund` transaction on-chain and confirms it. There is no "succeeded" to report. |
+| Event                                                    | Producer                                                                         | Notes                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `payment.succeeded`                                      | `apps/relayer`'s charge pipeline (Phase 9)                                       | Enqueued in the same DB transaction as the `succeeded` transition.                                                                                                                                                                                                                                                                                                                                             |
+| `payment.failed`                                         | `apps/relayer`'s charge pipeline (Phase 9)                                       | Enqueued on `permanently_failed` only — a `retry_scheduled` failure does not fire a webhook per attempt.                                                                                                                                                                                                                                                                                                       |
+| `mandate.completed`                                      | `apps/relayer`'s charge pipeline (Phase 12a) — **sole producer, see note below** | Detected without an event indexer: the pipeline already holds the _pre-charge_ on-chain `Mandate` (fresh read, step 2) with `successfulCharges`/`maxSuccessfulCharges`; a successful charge that brings the count to exactly the max deterministically completed the mandate (the contract never allows a charge that would exceed it), so the webhook is enqueued alongside `payment.succeeded` in that case. |
+| `mandate.active`                                         | `apps/relayer`'s on-chain event indexer (Phase 12c)                              | Indexes the contract's own `mandate_created` event — see below.                                                                                                                                                                                                                                                                                                                                                |
+| `mandate.paused` / `mandate.resumed` / `mandate.revoked` | `apps/relayer`'s on-chain event indexer (Phase 12c)                              | Indexes `mandate_paused`/`mandate_resumed`/`mandate_revoked` — see below.                                                                                                                                                                                                                                                                                                                                      |
+| `refund.succeeded`                                       | **none**                                                                         | `POST /v1/payments/:id/refunds` only ever creates a `RefundRequest` row in `scheduled` (see that endpoint's docs above) — no relayer pipeline exists yet that actually submits a `refund` transaction on-chain and confirms it. There is no "succeeded" to report.                                                                                                                                             |
 
 ### On-chain event indexer (Phase 12c) — how the 4 `mandate.*` lifecycle events got a producer
 
@@ -591,7 +695,7 @@ HMAC-SHA256, precise enough to reimplement in another language.
 {unixTimestampSeconds}.{eventId}.{rawRequestBodyBytes}
 ```
 
-`rawRequestBodyBytes` is the *literal* HTTP body the delivery worker sends — sign the exact string
+`rawRequestBodyBytes` is the _literal_ HTTP body the delivery worker sends — sign the exact string
 that will be transmitted, never a re-serialization of the parsed object (whitespace/key-order can
 differ and would break verification even for a semantically-identical payload).
 
@@ -637,30 +741,30 @@ is only a first line of defense).
 
 Exponential, six total attempts (1 initial + 5 retries) before `dead_letter`:
 
-| Attempt | Delay from previous |
-| --- | --- |
-| 1 | immediately (delivery becomes due) |
-| 2 | +1 minute |
-| 3 | +5 minutes |
-| 4 | +30 minutes |
-| 5 | +2 hours |
-| 6 | +6 hours |
+| Attempt | Delay from previous                |
+| ------- | ---------------------------------- |
+| 1       | immediately (delivery becomes due) |
+| 2       | +1 minute                          |
+| 3       | +5 minutes                         |
+| 4       | +30 minutes                        |
+| 5       | +2 hours                           |
+| 6       | +6 hours                           |
 
 ~8.5 hours total — enough to ride out a typical deploy/incident window on the receiving end
 without retrying forever. Defined in `apps/relayer/src/webhook-retry-schedule.ts`.
 
 ### Response classification
 
-| Outcome | Class | Behavior |
-| --- | --- | --- |
-| HTTP 2xx | success | → `delivered` |
-| HTTP 408, 429 | retryable | → `retry_scheduled` (or `dead_letter` if exhausted) |
-| HTTP 5xx | retryable | → `retry_scheduled` (or `dead_letter` if exhausted) |
-| HTTP other 4xx | permanent | → `dead_letter` immediately, regardless of attempts remaining |
-| HTTP 3xx (redirect) | permanent | Never followed (`redirect: "manual"`) — see SSRF note below |
-| Request timeout (10s) | retryable | → `retry_scheduled` |
-| Network error (DNS/connect/reset) | retryable | → `retry_scheduled` |
-| SSRF guard blocked the URL | permanent | → `dead_letter` |
+| Outcome                           | Class     | Behavior                                                      |
+| --------------------------------- | --------- | ------------------------------------------------------------- |
+| HTTP 2xx                          | success   | → `delivered`                                                 |
+| HTTP 408, 429                     | retryable | → `retry_scheduled` (or `dead_letter` if exhausted)           |
+| HTTP 5xx                          | retryable | → `retry_scheduled` (or `dead_letter` if exhausted)           |
+| HTTP other 4xx                    | permanent | → `dead_letter` immediately, regardless of attempts remaining |
+| HTTP 3xx (redirect)               | permanent | Never followed (`redirect: "manual"`) — see SSRF note below   |
+| Request timeout (10s)             | retryable | → `retry_scheduled`                                           |
+| Network error (DNS/connect/reset) | retryable | → `retry_scheduled`                                           |
+| SSRF guard blocked the URL        | permanent | → `dead_letter`                                               |
 
 Defined in `apps/relayer/src/webhook-classify.ts`.
 
@@ -676,7 +780,7 @@ given attempt):
   `169.254/16`, `100.64/10` (CGNAT), `0/8`, `224/4`+; IPv6 `::1`, `fc00::/7`, `fe80::/10`, and
   IPv4-mapped addresses checked against the same IPv4 rules (both the dotted and compressed-hex
   forms `::ffff:127.0.0.1` / `::ffff:7f00:1`).
-- **DNS rebinding**: the delivery worker doesn't just check-then-reconnect — it *pins* the actual
+- **DNS rebinding**: the delivery worker doesn't just check-then-reconnect — it _pins_ the actual
   TCP connection to the exact address the check just resolved and approved
   (`undici`'s `Agent({ connect: { lookup } } })`, still using the real hostname for TLS SNI/`Host`),
   so a DNS record that changes between the check and the connect can't redirect the socket.
@@ -685,7 +789,7 @@ given attempt):
   as a permanent failure instead.
 
 Not covered: this is IP-range-based, not a full egress-network-policy solution — a merchant's own
-DNS infrastructure that resolves *at* the moment of the check to a public IP but is fronted by
+DNS infrastructure that resolves _at_ the moment of the check to a public IP but is fronted by
 something that later proxies to an internal service is outside what an application-level check can
 see. `packages/shared/src/webhook-url-guard.ts` documents this precisely.
 
@@ -779,7 +883,11 @@ import { verifyWebhook, WebhookSignatureError } from "@paymap/sdk";
 // Express: mount with `express.text({ type: "*/*" })` for this route so
 // `req.body` is the exact raw string, not pre-parsed JSON.
 try {
-  const { eventId } = verifyWebhook(req.body, req.header("Paymap-Signature")!, process.env.WEBHOOK_SECRET!);
+  const { eventId } = verifyWebhook(
+    req.body,
+    req.header("Paymap-Signature")!,
+    process.env.WEBHOOK_SECRET!,
+  );
   const event = JSON.parse(req.body);
   // handle event, deduping on `eventId` (stable across retries)
 } catch (error) {

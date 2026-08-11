@@ -35,7 +35,9 @@ export function assertSimulatedOk<T>(tx: AssembledTransaction<Result<T>>): void 
  * (`createMandateRegistryClient(deployment, { publicKey: payer.publicKey,
  * signTransaction: payer.signTransaction })`).
  */
-export async function submitAsInvoker<T>(tx: AssembledTransaction<Result<T>>): Promise<SentTransaction<Result<T>>> {
+export async function submitAsInvoker<T>(
+  tx: AssembledTransaction<Result<T>>,
+): Promise<SentTransaction<Result<T>>> {
   assertSimulatedOk(tx);
   return tx.signAndSend();
 }
@@ -62,12 +64,14 @@ export async function submitAsInvoker<T>(tx: AssembledTransaction<Result<T>>): P
  */
 export async function submitAsRelayer<T>(
   tx: AssembledTransaction<Result<T>>,
-  merchantSigner: KeypairSigner,
+  merchantSigner?: KeypairSigner,
 ): Promise<SentTransaction<Result<T>>> {
   assertSimulatedOk(tx);
 
-  const needsMerchantSignature = tx.needsNonInvokerSigningBy().includes(merchantSigner.publicKey);
-  if (needsMerchantSignature) {
+  const needsMerchantSignature =
+    merchantSigner !== undefined &&
+    tx.needsNonInvokerSigningBy().includes(merchantSigner.publicKey);
+  if (needsMerchantSignature && merchantSigner) {
     await tx.signAuthEntries({
       address: merchantSigner.publicKey,
       authorizeEntry: merchantSigner.authorizeEntry,
@@ -77,7 +81,9 @@ export async function submitAsRelayer<T>(
   const remaining = tx.needsNonInvokerSigningBy();
   if (remaining.length > 0) {
     throw new Error(
-      `transaction still needs non-invoker signatures from: ${remaining.join(", ")} (expected only "${merchantSigner.publicKey}" to be outstanding)`,
+      `transaction still needs non-invoker signatures from: ${remaining.join(", ")}${
+        merchantSigner ? ` (expected only "${merchantSigner.publicKey}" to be outstanding)` : ""
+      }`,
     );
   }
 

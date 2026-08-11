@@ -21,6 +21,7 @@ const WEB_PORT = 4311;
 
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: "system/**",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

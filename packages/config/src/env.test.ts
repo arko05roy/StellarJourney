@@ -10,7 +10,9 @@ const validEnv: NodeJS.ProcessEnv = {
   MANDATE_CONTRACT_ID: "CCEXAMPLE",
   RELAYER_SECRET_KEY: "SEXAMPLE",
   WEBHOOK_ENCRYPTION_KEY: "whsec_example",
+  AUTHORIZATION_ENCRYPTION_KEY: "authz_example",
   API_KEY_HASH_SECRET: "pepper",
+  MERCHANT_AUTH_DOMAIN: "localhost",
 };
 
 describe("loadEnv", () => {
@@ -40,6 +42,8 @@ describe("loadEnv", () => {
   });
 
   it("rejects a non-URL SOROBAN_RPC_URL", () => {
-    expect(() => loadEnv({ ...validEnv, SOROBAN_RPC_URL: "not-a-url" })).toThrow(EnvValidationError);
+    expect(() => loadEnv({ ...validEnv, SOROBAN_RPC_URL: "not-a-url" })).toThrow(
+      EnvValidationError,
+    );
   });
 });

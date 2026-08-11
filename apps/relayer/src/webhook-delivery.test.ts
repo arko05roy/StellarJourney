@@ -13,13 +13,22 @@ import { verifyWebhookSignature, WEBHOOK_SIGNATURE_HEADER } from "@paymap/shared
 import { processWebhookDelivery } from "./webhook-delivery.js";
 import { sendWebhook } from "./webhook-http.js";
 import { MAX_WEBHOOK_ATTEMPTS } from "./webhook-retry-schedule.js";
-import { cleanDatabase, createMerchantWithWebhook, createTestPrisma, TEST_WEBHOOK_ENCRYPTION_KEY } from "./test/helpers.js";
+import {
+  cleanDatabase,
+  createMerchantWithWebhook,
+  createTestPrisma,
+  TEST_WEBHOOK_ENCRYPTION_KEY,
+} from "./test/helpers.js";
 import type { PrismaClient } from "./db.js";
 import type { WebhookDeliveryOutcome } from "./webhook-classify.js";
 
 const NOW = new Date("2026-01-01T00:00:00.000Z");
 
-async function createPendingDelivery(prisma: PrismaClient, merchantId: string, overrides: { status?: "pending" | "retry_scheduled"; attemptCount?: number } = {}) {
+async function createPendingDelivery(
+  prisma: PrismaClient,
+  merchantId: string,
+  overrides: { status?: "pending" | "retry_scheduled"; attemptCount?: number } = {},
+) {
   return prisma.webhookDelivery.create({
     data: {
       merchantId,
@@ -72,7 +81,10 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
 
     const fakeSend = async (): Promise<WebhookDeliveryOutcome> => ({ kind: "http", status: 503 });
 
-    const outcome = await processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend }, delivery.id);
+    const outcome = await processWebhookDelivery(
+      { prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend },
+      delivery.id,
+    );
 
     expect(outcome.kind).toBe("retry_scheduled");
     const row = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
@@ -86,7 +98,10 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
 
     const fakeSend = async (): Promise<WebhookDeliveryOutcome> => ({ kind: "http", status: 404 });
 
-    const outcome = await processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend }, delivery.id);
+    const outcome = await processWebhookDelivery(
+      { prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend },
+      delivery.id,
+    );
 
     expect(outcome.kind).toBe("dead_letter");
     const row = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
@@ -95,10 +110,16 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
 
   it("exhausting the retry schedule dead-letters instead of scheduling a 7th attempt", async () => {
     const merchant = await createMerchantWithWebhook(prisma, "https://merchant.example.com/hooks");
-    const delivery = await createPendingDelivery(prisma, merchant.merchantId, { status: "retry_scheduled", attemptCount: MAX_WEBHOOK_ATTEMPTS - 1 });
+    const delivery = await createPendingDelivery(prisma, merchant.merchantId, {
+      status: "retry_scheduled",
+      attemptCount: MAX_WEBHOOK_ATTEMPTS - 1,
+    });
 
     const fakeSend = async (): Promise<WebhookDeliveryOutcome> => ({ kind: "timeout" });
-    const outcome = await processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend }, delivery.id);
+    const outcome = await processWebhookDelivery(
+      { prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend },
+      delivery.id,
+    );
 
     expect(outcome.kind).toBe("dead_letter");
     const row = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
@@ -107,7 +128,12 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
   });
 
   it("a merchant with no webhook endpoint configured dead-letters without ever calling send", async () => {
-    const merchant = await prisma.merchant.create({ data: { name: "Unconfigured", walletAddress: "GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWX234" } });
+    const merchant = await prisma.merchant.create({
+      data: {
+        name: "Unconfigured",
+        walletAddress: "GABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNOPQRSTUVWX234",
+      },
+    });
     const delivery = await createPendingDelivery(prisma, merchant.id);
 
     let calls = 0;
@@ -116,7 +142,10 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
       return { kind: "http", status: 200 };
     };
 
-    const outcome = await processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend }, delivery.id);
+    const outcome = await processWebhookDelivery(
+      { prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend },
+      delivery.id,
+    );
 
     expect(outcome).toEqual({ kind: "dead_letter", reason: "WEBHOOK_ENDPOINT_NOT_CONFIGURED" });
     expect(calls).toBe(0);
@@ -132,7 +161,10 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
       return { kind: "http", status: 200 };
     };
 
-    const outcome = await processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: "a-totally-different-key", send: fakeSend }, delivery.id);
+    const outcome = await processWebhookDelivery(
+      { prisma, now: () => NOW, webhookEncryptionKey: "a-totally-different-key", send: fakeSend },
+      delivery.id,
+    );
 
     expect(outcome).toEqual({ kind: "dead_letter", reason: "WEBHOOK_SECRET_DECRYPT_FAILED" });
     expect(calls).toBe(0);
@@ -150,8 +182,24 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
     };
 
     const [a, b] = await Promise.all([
-      processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend }, delivery.id),
-      processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend }, delivery.id),
+      processWebhookDelivery(
+        {
+          prisma,
+          now: () => NOW,
+          webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
+          send: fakeSend,
+        },
+        delivery.id,
+      ),
+      processWebhookDelivery(
+        {
+          prisma,
+          now: () => NOW,
+          webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
+          send: fakeSend,
+        },
+        delivery.id,
+      ),
     ]);
 
     expect(calls).toBe(1);
@@ -164,16 +212,37 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
     const delivery = await createPendingDelivery(prisma, merchant.merchantId);
 
     const seenEventIds: string[] = [];
-    const fakeSendFail = async (): Promise<WebhookDeliveryOutcome> => ({ kind: "http", status: 503 });
-    await processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSendFail }, delivery.id);
+    const fakeSendFail = async (): Promise<WebhookDeliveryOutcome> => ({
+      kind: "http",
+      status: 503,
+    });
+    await processWebhookDelivery(
+      {
+        prisma,
+        now: () => NOW,
+        webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
+        send: fakeSendFail,
+      },
+      delivery.id,
+    );
 
     // Re-enter as the scheduler would once nextAttemptAt elapses.
     const later = new Date(NOW.getTime() + 61_000);
-    const fakeSendCapture = async (args: Parameters<typeof sendWebhook>[0]): Promise<WebhookDeliveryOutcome> => {
+    const fakeSendCapture = async (
+      args: Parameters<typeof sendWebhook>[0],
+    ): Promise<WebhookDeliveryOutcome> => {
       seenEventIds.push(args.eventId);
       return { kind: "http", status: 200 };
     };
-    await processWebhookDelivery({ prisma, now: () => later, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSendCapture }, delivery.id);
+    await processWebhookDelivery(
+      {
+        prisma,
+        now: () => later,
+        webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
+        send: fakeSendCapture,
+      },
+      delivery.id,
+    );
 
     expect(seenEventIds).toEqual([delivery.eventId]);
     const row = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
@@ -181,21 +250,77 @@ describe("processWebhookDelivery (fake send — pipeline logic)", () => {
     expect(row.status).toBe("delivered");
   });
 
+  it("repeated receiver errors exhaust all six attempts, preserve event id, and dead-letter exactly once", async () => {
+    const merchant = await createMerchantWithWebhook(prisma, "https://merchant.example.com/hooks");
+    const delivery = await createPendingDelivery(prisma, merchant.merchantId);
+    const eventIds: string[] = [];
+    let clock = NOW;
+    const alwaysFail = async (
+      args: Parameters<typeof sendWebhook>[0],
+    ): Promise<WebhookDeliveryOutcome> => {
+      eventIds.push(args.eventId);
+      return { kind: "http", status: 503 };
+    };
+
+    let outcome = await processWebhookDelivery(
+      {
+        prisma,
+        now: () => clock,
+        webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
+        send: alwaysFail,
+      },
+      delivery.id,
+    );
+    while (outcome.kind === "retry_scheduled") {
+      clock = new Date(outcome.nextAttemptAt.getTime() + 1);
+      outcome = await processWebhookDelivery(
+        {
+          prisma,
+          now: () => clock,
+          webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
+          send: alwaysFail,
+        },
+        delivery.id,
+      );
+    }
+
+    expect(outcome).toEqual({
+      kind: "dead_letter",
+      reason: "RETRY_SCHEDULE_EXHAUSTED (last: HTTP_503)",
+    });
+    expect(eventIds).toEqual(Array.from({ length: MAX_WEBHOOK_ATTEMPTS }, () => delivery.eventId));
+    const row = await prisma.webhookDelivery.findUniqueOrThrow({ where: { id: delivery.id } });
+    expect(row).toMatchObject({
+      status: "dead_letter",
+      attemptCount: MAX_WEBHOOK_ATTEMPTS,
+      eventId: delivery.eventId,
+    });
+  });
+
   it("the signed payload never contains the merchant's API key or webhook secret", async () => {
     const merchant = await createMerchantWithWebhook(prisma, "https://merchant.example.com/hooks");
     const rawApiKey = "sk_live_super-secret-api-key-value";
     await prisma.apiKey.create({
-      data: { merchantId: merchant.merchantId, keyPrefix: rawApiKey.slice(0, 16), keyHash: "irrelevant-hash-for-this-test" },
+      data: {
+        merchantId: merchant.merchantId,
+        keyPrefix: rawApiKey.slice(0, 16),
+        keyHash: "irrelevant-hash-for-this-test",
+      },
     });
     const delivery = await createPendingDelivery(prisma, merchant.merchantId);
 
     let capturedBody = "";
-    const fakeSend = async (args: Parameters<typeof sendWebhook>[0]): Promise<WebhookDeliveryOutcome> => {
+    const fakeSend = async (
+      args: Parameters<typeof sendWebhook>[0],
+    ): Promise<WebhookDeliveryOutcome> => {
       capturedBody = args.rawBody;
       return { kind: "http", status: 200 };
     };
 
-    await processWebhookDelivery({ prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend }, delivery.id);
+    await processWebhookDelivery(
+      { prisma, now: () => NOW, webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY, send: fakeSend },
+      delivery.id,
+    );
 
     expect(capturedBody).not.toContain(rawApiKey);
     expect(capturedBody).not.toContain(merchant.rawSecret);
@@ -224,7 +349,8 @@ describe("processWebhookDelivery + sendWebhook (real HTTP, no fake) — sample m
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
-    if (address === null || typeof address === "string") throw new Error("expected a real server address");
+    if (address === null || typeof address === "string")
+      throw new Error("expected a real server address");
     port = address.port;
   });
 
@@ -241,7 +367,13 @@ describe("processWebhookDelivery + sendWebhook (real HTTP, no fake) — sample m
         merchantId: merchant.merchantId,
         eventId: "evt_sample_receiver_test",
         eventType: "payment.succeeded",
-        payload: { chargeRequestId: "cr_demo", paymentId: "pay_demo", mandateId: "m_demo", chargeId: "c_demo", transactionHash: "tx_demo" },
+        payload: {
+          chargeRequestId: "cr_demo",
+          paymentId: "pay_demo",
+          mandateId: "m_demo",
+          chargeId: "c_demo",
+          transactionHash: "tx_demo",
+        },
       },
     });
 
@@ -274,10 +406,18 @@ describe("processWebhookDelivery + sendWebhook (real HTTP, no fake) — sample m
     // secret it was given at registration time — this is the real,
     // end-to-end proof (not a mocked assertion) that a merchant app can
     // authenticate a delivered webhook.
-    const verified = verifyWebhookSignature({ rawBody: request.body, header: signatureHeader as string, secret: merchant.rawSecret, now: NOW });
+    const verified = verifyWebhookSignature({
+      rawBody: request.body,
+      header: signatureHeader as string,
+      secret: merchant.rawSecret,
+      now: NOW,
+    });
     expect(verified.eventId).toBe("evt_sample_receiver_test");
 
-    const parsedBody = JSON.parse(request.body) as { eventType: string; data: { paymentId: string } };
+    const parsedBody = JSON.parse(request.body) as {
+      eventType: string;
+      data: { paymentId: string };
+    };
     expect(parsedBody.eventType).toBe("payment.succeeded");
     expect(parsedBody.data.paymentId).toBe("pay_demo");
 

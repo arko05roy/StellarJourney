@@ -1,0 +1,77 @@
+name: Nightly system E2E
+
+on:
+  schedule:
+    - cron: "30 20 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-system-e2e-testnet
+  cancel-in-progress: false
+
+jobs:
+  system-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: paymap
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d paymap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/paymap?schema=nightly_system
+      REDIS_URL: redis://localhost:6379
+      SYSTEM_E2E_TESTNET: "1"
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm --filter @paymap/web exec playwright install --with-deps chromium
+
+      - name: Run live testnet system E2E
+        run: pnpm test:e2e:system
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-system-e2e-${{ github.run_id }}
+          path: |
+            apps/web/test-results
+            apps/web/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14

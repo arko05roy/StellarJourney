@@ -1,0 +1,154 @@
+envVarGroups:
+  - name: paymap-staging-shared-secrets
+    envVars:
+      - key: WEBHOOK_ENCRYPTION_KEY
+        generateValue: true
+      - key: AUTHORIZATION_ENCRYPTION_KEY
+        generateValue: true
+
+services:
+  - type: web
+    name: paymap-web-staging
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: pnpm --filter @paymap/web start
+    autoDeployTrigger: checksPass
+    healthCheckPath: /
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: STELLAR_NETWORK
+        value: testnet
+      - key: NEXT_PUBLIC_API_URL
+        value: https://paymap-api-staging.onrender.com
+
+  - type: web
+    name: paymap-api-staging
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: pnpm --filter @paymap/api start
+    preDeployCommand: pnpm prisma:migrate:deploy
+    autoDeployTrigger: checksPass
+    healthCheckPath: /readyz
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - fromGroup: paymap-staging-shared-secrets
+      - key: DATABASE_URL
+        fromDatabase:
+          name: paymap-postgres-staging
+          property: connectionString
+      - key: STELLAR_NETWORK
+        value: testnet
+      - key: SOROBAN_RPC_URL
+        value: https://soroban-testnet.stellar.org
+      - key: HORIZON_URL
+        value: https://horizon-testnet.stellar.org
+      - key: MANDATE_CONTRACT_ID
+        value: CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22
+      - key: API_KEY_HASH_SECRET
+        generateValue: true
+      - key: MERCHANT_AUTH_DOMAIN
+        value: paymap-web.vercel.app
+
+  - type: pserv
+    name: paymap-relayer-staging
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: pnpm --filter @paymap/relayer start
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 120
+    envVars:
+      - fromGroup: paymap-staging-shared-secrets
+      - key: DATABASE_URL
+        fromDatabase:
+          name: paymap-postgres-staging
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: paymap-keyvalue-staging
+          property: connectionString
+      - key: STELLAR_NETWORK
+        value: testnet
+      - key: SOROBAN_RPC_URL
+        value: https://soroban-testnet.stellar.org
+      - key: HORIZON_URL
+        value: https://horizon-testnet.stellar.org
+      - key: MANDATE_CONTRACT_ID
+        value: CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22
+      - key: RELAYER_SECRET_KEY
+        sync: false
+
+  - type: keyvalue
+    name: paymap-keyvalue-staging
+    plan: starter
+    region: singapore
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+    persistenceMode: journal-snapshot
+
+  - type: pserv
+    name: paymap-prometheus-staging
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./ops/prometheus/Dockerfile
+    dockerContext: .
+    autoDeployTrigger: checksPass
+    disk:
+      name: prometheus-data
+      mountPath: /prometheus
+      sizeGB: 5
+
+  - type: pserv
+    name: paymap-alertmanager-staging
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./ops/alertmanager/Dockerfile
+    dockerContext: .
+    autoDeployTrigger: checksPass
+    disk:
+      name: alertmanager-data
+      mountPath: /alertmanager
+      sizeGB: 1
+
+  - type: web
+    name: paymap-grafana-staging
+    runtime: docker
+    plan: starter
+    region: singapore
+    dockerfilePath: ./ops/grafana/Dockerfile
+    dockerContext: .
+    autoDeployTrigger: checksPass
+    healthCheckPath: /api/health
+    disk:
+      name: grafana-data
+      mountPath: /var/lib/grafana
+      sizeGB: 1
+    envVars:
+      - key: GF_SERVER_HTTP_PORT
+        value: "10000"
+      - key: GF_SECURITY_ADMIN_USER
+        value: admin
+      - key: GF_SECURITY_ADMIN_PASSWORD
+        generateValue: true
+      - key: GF_USERS_ALLOW_SIGN_UP
+        value: "false"
+
+databases:
+  - name: paymap-postgres-staging
+    plan: basic-256mb
+    region: singapore
+    postgresMajorVersion: "16"
+    databaseName: paymap_staging
+    user: paymap_staging
+    ipAllowList: []

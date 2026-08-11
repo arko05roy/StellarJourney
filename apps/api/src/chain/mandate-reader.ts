@@ -16,6 +16,7 @@ import {
   type DeploymentRecord,
   type Mandate,
 } from "@paymap/contract-client";
+import { rpc } from "@stellar/stellar-sdk";
 
 export { MandateReadError };
 export type { Mandate };
@@ -25,12 +26,18 @@ export interface MandateReader {
   getMandate(mandateId: string): Promise<Mandate>;
   /** Cumulative on-chain refunded total for a payment (`0n` if none). */
   getRefundedTotal(paymentId: string): Promise<bigint>;
+  /** Current trusted RPC ledger sequence for authorization-expiry checks. */
+  getLatestLedgerSequence(): Promise<number>;
 }
 
 export function createChainMandateReader(deployment: DeploymentRecord): MandateReader {
   const client = createMandateRegistryClient(deployment);
+  const server = new rpc.Server(deployment.rpcUrl, {
+    allowHttp: deployment.rpcUrl.startsWith("http://"),
+  });
   return {
     getMandate: (mandateId: string) => getMandateOnChain(client, mandateId),
     getRefundedTotal: (paymentId: string) => getRefundedTotalOnChain(client, paymentId),
+    getLatestLedgerSequence: async () => (await server.getLatestLedger()).sequence,
   };
 }

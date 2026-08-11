@@ -18,11 +18,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@paymap/shared": "workspace:*"
+    "@paymap/shared": "workspace:*",
+    "@paymap/stellar": "workspace:*",
+    "@stellar/stellar-sdk": "^16.1.0"
   },
   "devDependencies": {
     "@paymap/config": "workspace:*",
-    "@paymap/stellar": "workspace:*",
     "@types/node": "^22.10.5",
     "vitest": "^2.1.8"
   }

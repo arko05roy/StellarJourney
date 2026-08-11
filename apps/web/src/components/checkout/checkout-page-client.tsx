@@ -14,6 +14,7 @@ import { CheckoutFlow } from "./checkout-flow";
 import { createStellarChainGateway } from "@/lib/chain-gateway";
 import { createStellarWalletAdapter } from "@/lib/wallet";
 import { createStubChainGateway, createStubWalletAdapter } from "@/lib/test-stubs";
+import { createSystemE2EWalletAdapter } from "@/lib/system-e2e-wallet";
 import type { PublicCheckoutSession } from "@/lib/api";
 // Type-only import: erased at compile time, so this never pulls the real
 // module (which touches `node:fs` to load `deployments/<network>.json`)
@@ -28,10 +29,26 @@ export interface CheckoutPageClientProps {
 }
 
 const USE_STUBS = process.env.NEXT_PUBLIC_E2E_STUBS === "1";
+const SYSTEM_E2E_SIGNER_URL = process.env.NEXT_PUBLIC_SYSTEM_E2E_SIGNER_URL;
 
-export function CheckoutPageClient({ session, deployment, nowUnixSeconds }: CheckoutPageClientProps) {
-  const wallet = useMemo(() => (USE_STUBS ? createStubWalletAdapter() : createStellarWalletAdapter(deployment.networkPassphrase as Networks)), [deployment.networkPassphrase]);
-  const gateway = useMemo(() => (USE_STUBS ? createStubChainGateway() : createStellarChainGateway(deployment)), [deployment]);
+export function CheckoutPageClient({
+  session,
+  deployment,
+  nowUnixSeconds,
+}: CheckoutPageClientProps) {
+  const wallet = useMemo(
+    () =>
+      USE_STUBS
+        ? createStubWalletAdapter()
+        : SYSTEM_E2E_SIGNER_URL
+          ? createSystemE2EWalletAdapter(SYSTEM_E2E_SIGNER_URL)
+          : createStellarWalletAdapter(deployment.networkPassphrase as Networks),
+    [deployment.networkPassphrase],
+  );
+  const gateway = useMemo(
+    () => (USE_STUBS ? createStubChainGateway() : createStellarChainGateway(deployment)),
+    [deployment],
+  );
 
   return (
     <CheckoutFlow

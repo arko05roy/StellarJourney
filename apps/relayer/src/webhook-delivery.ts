@@ -34,11 +34,19 @@ import { transitionWebhookDelivery } from "@paymap/api/dist/webhook-state-machin
 import { ApiError } from "@paymap/api/dist/errors.js";
 import { decryptWebhookSecret, WebhookSecretCryptoError, type HostResolver } from "@paymap/shared";
 import type { WebhookDeliveryStatus, PrismaClient } from "./db.js";
-import { classifyWebhookDeliveryOutcome, describeWebhookDeliveryOutcome } from "./webhook-classify.js";
+import {
+  classifyWebhookDeliveryOutcome,
+  describeWebhookDeliveryOutcome,
+} from "./webhook-classify.js";
 import { nextWebhookRetryAt } from "./webhook-retry-schedule.js";
 import { sendWebhook } from "./webhook-http.js";
+import { noopObservability, type Observability } from "./observability.js";
 
-export type WebhookLogger = (level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>) => void;
+export type WebhookLogger = (
+  level: "info" | "warn" | "error",
+  event: string,
+  fields: Record<string, unknown>,
+) => void;
 const noopLogger: WebhookLogger = () => undefined;
 
 export interface WebhookDeliveryDeps {
@@ -50,6 +58,7 @@ export interface WebhookDeliveryDeps {
   /** Test-only escape hatch — see `assertSafeWebhookUrl`'s doc. Never set outside `apps/relayer/src/test/`. */
   allowPrivateWebhookAddresses?: boolean;
   logger?: WebhookLogger;
+  observability?: Observability;
   /** Injectable — tests supply a fake instead of making a real HTTP call. Defaults to the real `sendWebhook`. */
   send?: typeof sendWebhook;
 }
@@ -60,12 +69,18 @@ export type WebhookDeliveryOutcome =
   | { kind: "retry_scheduled"; nextAttemptAt: Date; reason: string }
   | { kind: "dead_letter"; reason: string };
 
-export async function processWebhookDelivery(deps: WebhookDeliveryDeps, webhookDeliveryId: string): Promise<WebhookDeliveryOutcome> {
+export async function processWebhookDelivery(
+  deps: WebhookDeliveryDeps,
+  webhookDeliveryId: string,
+): Promise<WebhookDeliveryOutcome> {
   const { prisma, now } = deps;
   const log = deps.logger ?? noopLogger;
+  const metrics = deps.observability ?? noopObservability;
   const send = deps.send ?? sendWebhook;
 
-  const maybeDelivery = await prisma.webhookDelivery.findUnique({ where: { id: webhookDeliveryId } });
+  const maybeDelivery = await prisma.webhookDelivery.findUnique({
+    where: { id: webhookDeliveryId },
+  });
   if (!maybeDelivery) {
     throw new Error(`WebhookDelivery "${webhookDeliveryId}" does not exist.`);
   }
@@ -74,23 +89,57 @@ export async function processWebhookDelivery(deps: WebhookDeliveryDeps, webhookD
   // to its full type across a nested function boundary — see pipeline.ts's
   // identical `chargeRequest` rebinding for the same reason).
   const delivery = maybeDelivery;
+  const payload =
+    typeof delivery.payload === "object" && delivery.payload !== null
+      ? (delivery.payload as Record<string, unknown>)
+      : {};
+  const logContext = {
+    requestId: webhookDeliveryId,
+    merchantId: delivery.merchantId,
+    ...(typeof payload["mandateId"] === "string" ? { mandateId: payload["mandateId"] } : {}),
+    ...(typeof payload["chargeId"] === "string" ? { chargeId: payload["chargeId"] } : {}),
+    ...(typeof payload["transactionHash"] === "string"
+      ? { transactionHash: payload["transactionHash"] }
+      : {}),
+  };
 
-  const claimFrom: WebhookDeliveryStatus = delivery.status === "retry_scheduled" ? "retry_scheduled" : "pending";
+  const claimFrom: WebhookDeliveryStatus =
+    delivery.status === "retry_scheduled" ? "retry_scheduled" : "pending";
   const attemptCount = delivery.attemptCount + 1;
   try {
-    await transitionWebhookDelivery(prisma, webhookDeliveryId, claimFrom, "delivering", { attemptCount });
+    await transitionWebhookDelivery(prisma, webhookDeliveryId, claimFrom, "delivering", {
+      attemptCount,
+    });
   } catch (error) {
     if (error instanceof ApiError && error.code === "InvalidStateTransition") {
-      log("info", "webhook_delivery.claim_lost", { webhookDeliveryId, attemptedFrom: claimFrom });
+      log("info", "webhook_delivery.claim_lost", {
+        ...logContext,
+        webhookDeliveryId,
+        attemptedFrom: claimFrom,
+      });
       return { kind: "skipped_not_claimable" };
     }
     throw error;
   }
-  log("info", "webhook_delivery.claimed", { webhookDeliveryId, eventId: delivery.eventId, eventType: delivery.eventType, attemptCount });
+  log("info", "webhook_delivery.claimed", {
+    ...logContext,
+    webhookDeliveryId,
+    eventId: delivery.eventId,
+    eventType: delivery.eventType,
+    attemptCount,
+  });
 
   async function deadLetter(reason: string): Promise<WebhookDeliveryOutcome> {
-    await transitionWebhookDelivery(prisma, webhookDeliveryId, "delivering", "dead_letter", { nextAttemptAt: null });
-    log("error", "webhook_delivery.dead_letter", { webhookDeliveryId, eventId: delivery.eventId, reason });
+    await transitionWebhookDelivery(prisma, webhookDeliveryId, "delivering", "dead_letter", {
+      nextAttemptAt: null,
+    });
+    metrics.recordWebhook(false);
+    log("error", "webhook_delivery.dead_letter", {
+      ...logContext,
+      webhookDeliveryId,
+      eventId: delivery.eventId,
+      reason,
+    });
     return { kind: "dead_letter", reason };
   }
 
@@ -138,7 +187,13 @@ export async function processWebhookDelivery(deps: WebhookDeliveryDeps, webhookD
 
   if (responseClass === "success") {
     await transitionWebhookDelivery(prisma, webhookDeliveryId, "delivering", "delivered");
-    log("info", "webhook_delivery.delivered", { webhookDeliveryId, eventId: delivery.eventId, eventType: delivery.eventType });
+    metrics.recordWebhook(true);
+    log("info", "webhook_delivery.delivered", {
+      ...logContext,
+      webhookDeliveryId,
+      eventId: delivery.eventId,
+      eventType: delivery.eventType,
+    });
     return { kind: "delivered" };
   }
 
@@ -151,7 +206,17 @@ export async function processWebhookDelivery(deps: WebhookDeliveryDeps, webhookD
   if (retryAt === undefined) {
     return deadLetter(`RETRY_SCHEDULE_EXHAUSTED (last: ${reason})`);
   }
-  await transitionWebhookDelivery(prisma, webhookDeliveryId, "delivering", "retry_scheduled", { nextAttemptAt: retryAt });
-  log("warn", "webhook_delivery.retry_scheduled", { webhookDeliveryId, eventId: delivery.eventId, reason, nextAttemptAt: retryAt.toISOString() });
+  metrics.recordWebhook(false);
+  await transitionWebhookDelivery(prisma, webhookDeliveryId, "delivering", "retry_scheduled", {
+    nextAttemptAt: retryAt,
+  });
+  metrics.recordRetry();
+  log("warn", "webhook_delivery.retry_scheduled", {
+    ...logContext,
+    webhookDeliveryId,
+    eventId: delivery.eventId,
+    reason,
+    nextAttemptAt: retryAt.toISOString(),
+  });
   return { kind: "retry_scheduled", nextAttemptAt: retryAt, reason };
 }

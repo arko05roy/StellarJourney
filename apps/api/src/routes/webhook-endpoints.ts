@@ -12,10 +12,20 @@
  */
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
-import { assertSafeWebhookUrl, encryptWebhookSecret, generateWebhookSecret, UnsafeWebhookUrlError, type HostResolver } from "@paymap/shared";
+import {
+  assertSafeWebhookUrl,
+  encryptWebhookSecret,
+  generateWebhookSecret,
+  UnsafeWebhookUrlError,
+  type HostResolver,
+} from "@paymap/shared";
 import { badRequest } from "../errors.js";
 import { createAuthPreHandler, requireMerchantContext } from "../auth/plugin.js";
-import { RegisterWebhookEndpointSchema, WebhookEndpointTestSchema, type WebhookEventEnvelope } from "../schemas/webhooks.js";
+import {
+  RegisterWebhookEndpointSchema,
+  WebhookEndpointTestSchema,
+  type WebhookEventEnvelope,
+} from "../schemas/webhooks.js";
 import { randomHexId32 } from "../utils/ids.js";
 import { WebhookDeliveryStatus, type WebhookDelivery } from "../db.js";
 
@@ -39,9 +49,20 @@ function toWebhookDeliveryResponse(delivery: WebhookDelivery) {
   };
 }
 
-async function guardedWebhookUrl(app: { allowInsecureWebhookHttp: boolean; resolveWebhookHost: HostResolver | undefined }, url: string): Promise<void> {
+async function guardedWebhookUrl(
+  app: {
+    allowInsecureWebhookHttp: boolean;
+    allowPrivateWebhookAddresses: boolean;
+    resolveWebhookHost: HostResolver | undefined;
+  },
+  url: string,
+): Promise<void> {
   try {
-    await assertSafeWebhookUrl(url, { allowInsecureHttp: app.allowInsecureWebhookHttp, ...(app.resolveWebhookHost ? { resolveHost: app.resolveWebhookHost } : {}) });
+    await assertSafeWebhookUrl(url, {
+      allowInsecureHttp: app.allowInsecureWebhookHttp,
+      allowPrivateAddresses: app.allowPrivateWebhookAddresses,
+      ...(app.resolveWebhookHost ? { resolveHost: app.resolveWebhookHost } : {}),
+    });
   } catch (error) {
     if (error instanceof UnsafeWebhookUrlError) {
       throw badRequest(error.code, error.message);
@@ -58,35 +79,43 @@ const webhookEndpointsRoutes: FastifyPluginAsync = async (app) => {
    * ever persisted, mirroring `auth/api-key.ts`'s "raw form never stored"
    * discipline for API keys.
    */
-  app.post("/webhook-endpoints", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
-    const { merchant } = requireMerchantContext(request);
-    const input = RegisterWebhookEndpointSchema.parse(request.body);
+  app.post(
+    "/webhook-endpoints",
+    { preHandler: createAuthPreHandler(app.prisma, app.hashSecret, ["webhooks:write"]) },
+    async (request, reply) => {
+      const { merchant } = requireMerchantContext(request);
+      const input = RegisterWebhookEndpointSchema.parse(request.body);
 
-    await guardedWebhookUrl(app, input.url);
+      await guardedWebhookUrl(app, input.url);
 
-    const rawSecret = generateWebhookSecret();
-    const encryptedSecret = encryptWebhookSecret(rawSecret, app.webhookEncryptionKey);
+      const rawSecret = generateWebhookSecret();
+      const encryptedSecret = encryptWebhookSecret(rawSecret, app.webhookEncryptionKey);
 
-    await app.prisma.merchant.update({
-      where: { id: merchant.id },
-      data: { webhookUrl: input.url, webhookSecret: encryptedSecret },
-    });
+      await app.prisma.merchant.update({
+        where: { id: merchant.id },
+        data: { webhookUrl: input.url, webhookSecret: encryptedSecret },
+      });
 
-    reply.status(201).send({
-      webhookUrl: input.url,
-      // Shown once, here, and never again — not retrievable through any other endpoint (mirrors POST /v1/merchants and the API-key rotation endpoint).
-      webhookSecret: rawSecret,
-    });
-  });
+      reply.status(201).send({
+        webhookUrl: input.url,
+        // Shown once, here, and never again — mirrors scoped API-key issuance.
+        webhookSecret: rawSecret,
+      });
+    },
+  );
 
   /** Non-secret status read — never returns the secret (encrypted or otherwise). */
-  app.get("/webhook-endpoints", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
-    const { merchant } = requireMerchantContext(request);
-    reply.status(200).send({
-      configured: merchant.webhookUrl !== null && merchant.webhookSecret !== null,
-      webhookUrl: merchant.webhookUrl ?? undefined,
-    });
-  });
+  app.get(
+    "/webhook-endpoints",
+    { preHandler: createAuthPreHandler(app.prisma, app.hashSecret, ["webhooks:read"]) },
+    async (request, reply) => {
+      const { merchant } = requireMerchantContext(request);
+      reply.status(200).send({
+        configured: merchant.webhookUrl !== null && merchant.webhookSecret !== null,
+        webhookUrl: merchant.webhookUrl ?? undefined,
+      });
+    },
+  );
 
   /**
    * Merchant-scoped delivery history — backs the dashboard's "Webhooks"
@@ -96,28 +125,38 @@ const webhookEndpointsRoutes: FastifyPluginAsync = async (app) => {
    * into this UI unexpectedly) and never anything secret (the encrypted
    * `webhookSecret` lives only on `Merchant`, never on `WebhookDelivery`).
    */
-  app.get("/webhook-deliveries", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
-    const { merchant } = requireMerchantContext(request);
-    const query = ListWebhookDeliveriesQuerySchema.parse(request.query);
+  app.get(
+    "/webhook-deliveries",
+    { preHandler: createAuthPreHandler(app.prisma, app.hashSecret, ["webhooks:read"]) },
+    async (request, reply) => {
+      const { merchant } = requireMerchantContext(request);
+      const query = ListWebhookDeliveriesQuerySchema.parse(request.query);
 
-    let statusIn: string[] | undefined;
-    if (query.status !== undefined) {
-      statusIn = query.status.split(",").map((s) => s.trim());
-      for (const value of statusIn) {
-        if (!WEBHOOK_DELIVERY_STATUS_VALUES.includes(value)) {
-          throw badRequest("INVALID_STATUS_FILTER", `"${value}" is not a valid webhook delivery status.`);
+      let statusIn: string[] | undefined;
+      if (query.status !== undefined) {
+        statusIn = query.status.split(",").map((s) => s.trim());
+        for (const value of statusIn) {
+          if (!WEBHOOK_DELIVERY_STATUS_VALUES.includes(value)) {
+            throw badRequest(
+              "INVALID_STATUS_FILTER",
+              `"${value}" is not a valid webhook delivery status.`,
+            );
+          }
         }
       }
-    }
 
-    const deliveries = await app.prisma.webhookDelivery.findMany({
-      where: { merchantId: merchant.id, ...(statusIn ? { status: { in: statusIn as WebhookDelivery["status"][] } } : {}) },
-      orderBy: { createdAt: "desc" },
-      take: query.limit,
-    });
+      const deliveries = await app.prisma.webhookDelivery.findMany({
+        where: {
+          merchantId: merchant.id,
+          ...(statusIn ? { status: { in: statusIn as WebhookDelivery["status"][] } } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: query.limit,
+      });
 
-    reply.status(200).send({ data: deliveries.map(toWebhookDeliveryResponse) });
-  });
+      reply.status(200).send({ data: deliveries.map(toWebhookDeliveryResponse) });
+    },
+  );
 
   /**
    * Validates a candidate URL and queues a sample `webhook.test` delivery
@@ -130,37 +169,44 @@ const webhookEndpointsRoutes: FastifyPluginAsync = async (app) => {
    * to sign with until one is registered, and the worker skips such rows;
    * see `apps/relayer/src/webhook-delivery.ts`).
    */
-  app.post("/webhook-endpoints/test", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
-    const { merchant } = requireMerchantContext(request);
-    const input = WebhookEndpointTestSchema.parse(request.body);
+  app.post(
+    "/webhook-endpoints/test",
+    { preHandler: createAuthPreHandler(app.prisma, app.hashSecret, ["webhooks:write"]) },
+    async (request, reply) => {
+      const { merchant } = requireMerchantContext(request);
+      const input = WebhookEndpointTestSchema.parse(request.body);
 
-    await guardedWebhookUrl(app, input.url);
+      await guardedWebhookUrl(app, input.url);
 
-    const eventId = randomHexId32();
-    // `WebhookDelivery.payload` stores only the event *data* — the
-    // delivery worker builds the full `WebhookEventEnvelope` (eventId,
-    // eventType, createdAt, signatureVersion) fresh at send time from the
-    // row's own columns, so there is exactly one place that assembles the
-    // wire envelope (CLAUDE.md §20), not two slightly-different copies.
-    const data: WebhookEventEnvelope<{ url: string; message: string }>["data"] = { url: input.url, message: "This is a test event from Paymap." };
+      const eventId = randomHexId32();
+      // `WebhookDelivery.payload` stores only the event *data* — the
+      // delivery worker builds the full `WebhookEventEnvelope` (eventId,
+      // eventType, createdAt, signatureVersion) fresh at send time from the
+      // row's own columns, so there is exactly one place that assembles the
+      // wire envelope (CLAUDE.md §20), not two slightly-different copies.
+      const data: WebhookEventEnvelope<{ url: string; message: string }>["data"] = {
+        url: input.url,
+        message: "This is a test event from Paymap.",
+      };
 
-    const delivery = await app.prisma.webhookDelivery.create({
-      data: {
-        merchantId: merchant.id,
-        eventId,
-        eventType: "webhook.test",
-        payload: data,
-        status: "pending",
-      },
-    });
+      const delivery = await app.prisma.webhookDelivery.create({
+        data: {
+          merchantId: merchant.id,
+          eventId,
+          eventType: "webhook.test",
+          payload: data,
+          status: "pending",
+        },
+      });
 
-    reply.status(202).send({
-      id: delivery.id,
-      eventId: delivery.eventId,
-      status: delivery.status,
-      createdAt: delivery.createdAt.toISOString(),
-    });
-  });
+      reply.status(202).send({
+        id: delivery.id,
+        eventId: delivery.eventId,
+        status: delivery.status,
+        createdAt: delivery.createdAt.toISOString(),
+      });
+    },
+  );
 };
 
 export default webhookEndpointsRoutes;

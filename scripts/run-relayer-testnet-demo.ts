@@ -1,6 +1,10 @@
 #!/usr/bin/env tsx
 /**
- * Phase 9's required real-testnet proof: one scheduled `ChargeRequest`
+ * Phase 9's required real-testnet proof plus Phase 15's scripted protection
+ * scenes: one successful collection, one over-limit rejection, payer
+ * revocation, then one otherwise-valid post-revocation rejection.
+ *
+ * The first scheduled `ChargeRequest` is
  * executed end-to-end through the ACTUAL relayer pipeline
  * (`@paymap/relayer`'s `processChargeRequest`, `createSorobanChainGateway`)
  * — not a hand-rolled one-off submission. This is the same trust model
@@ -33,13 +37,20 @@ import { createSorobanChainGateway } from "@paymap/relayer/dist/chain-gateway.js
 import { processChargeRequest } from "@paymap/relayer/dist/pipeline.js";
 import {
   buildCreateMandate,
+  buildRevokeMandate,
   createMandateRegistryClient,
   getMandate,
   idToHex,
   type MandateInput,
 } from "@paymap/contract-client";
 import { submitAsInvoker } from "@paymap/stellar";
-import { ensureAssetBalance, ensureFundedIdentity, ensureTrustline, log } from "./lib/testnet-setup.js";
+import {
+  ensureAssetBalance,
+  ensureFundedIdentity,
+  ensureTrustline,
+  log,
+  stellar,
+} from "./lib/testnet-setup.js";
 
 const SCOPE = "run-relayer-testnet-demo";
 const NETWORK = "testnet";
@@ -51,7 +62,9 @@ const PAYER = "paymap-payer";
 const RELAYER = "paymap-relayer";
 
 const ASSET_DECIMALS = 7;
-const FIXED_CHARGE_AMOUNT_DECIMAL = "3.00";
+const SUCCESS_AMOUNT_DECIMAL = "14.50";
+const MAX_PER_CHARGE_DECIMAL = "20.00";
+const OVER_LIMIT_AMOUNT_DECIMAL = "25.00";
 const MAX_SUCCESSFUL_CHARGES = 2;
 const ALLOWANCE_BUFFER_DECIMAL = "1.00";
 const PERIOD_SECONDS = 3600n;
@@ -62,7 +75,7 @@ function hex32(): string {
 }
 
 function stellarInvoke(args: string[]): void {
-  execFileSync("stellar", args, { encoding: "utf-8", stdio: ["ignore", "pipe", "inherit"] });
+  stellar(args);
 }
 
 async function fetchLatestLedgerSeq(rpcUrl: string): Promise<number> {
@@ -86,30 +99,86 @@ async function main(): Promise<void> {
   const merchantKey = await ensureFundedIdentity(SCOPE, NETWORK, HORIZON_URL, MERCHANT);
   const payerKey = await ensureFundedIdentity(SCOPE, NETWORK, HORIZON_URL, PAYER);
   const relayerKey = await ensureFundedIdentity(SCOPE, NETWORK, HORIZON_URL, RELAYER);
-  log(SCOPE, `payer=${payerKey} merchant=${merchantKey} relayer=${relayerKey} (relayer holds no spending authority)`);
+  log(
+    SCOPE,
+    `payer=${payerKey} merchant=${merchantKey} relayer=${relayerKey} (relayer holds no spending authority)`,
+  );
 
-  await ensureTrustline(SCOPE, NETWORK, HORIZON_URL, MERCHANT, merchantKey, deployment.asset.code, deployment.asset.issuer);
-  await ensureTrustline(SCOPE, NETWORK, HORIZON_URL, PAYER, payerKey, deployment.asset.code, deployment.asset.issuer);
+  await ensureTrustline(
+    SCOPE,
+    NETWORK,
+    HORIZON_URL,
+    MERCHANT,
+    merchantKey,
+    deployment.asset.code,
+    deployment.asset.issuer,
+  );
+  await ensureTrustline(
+    SCOPE,
+    NETWORK,
+    HORIZON_URL,
+    PAYER,
+    payerKey,
+    deployment.asset.code,
+    deployment.asset.issuer,
+  );
 
-  const fixedAmountBaseUnits = decimalToBaseUnits(FIXED_CHARGE_AMOUNT_DECIMAL, ASSET_DECIMALS);
-  const theoreticalMaxBaseUnits = fixedAmountBaseUnits * BigInt(MAX_SUCCESSFUL_CHARGES);
-  const allowanceBaseUnits = theoreticalMaxBaseUnits + decimalToBaseUnits(ALLOWANCE_BUFFER_DECIMAL, ASSET_DECIMALS);
+  const successAmountBaseUnits = decimalToBaseUnits(SUCCESS_AMOUNT_DECIMAL, ASSET_DECIMALS);
+  const maxPerChargeBaseUnits = decimalToBaseUnits(MAX_PER_CHARGE_DECIMAL, ASSET_DECIMALS);
+  const overLimitAmountBaseUnits = decimalToBaseUnits(OVER_LIMIT_AMOUNT_DECIMAL, ASSET_DECIMALS);
+  const theoreticalMaxBaseUnits = maxPerChargeBaseUnits * BigInt(MAX_SUCCESSFUL_CHARGES);
+  const allowanceBaseUnits =
+    theoreticalMaxBaseUnits + decimalToBaseUnits(ALLOWANCE_BUFFER_DECIMAL, ASSET_DECIMALS);
 
-  await ensureAssetBalance(SCOPE, NETWORK, HORIZON_URL, ASSET_ISSUER, deployment.asset.issuer, PAYER, payerKey, deployment.asset.code, allowanceBaseUnits);
+  await ensureAssetBalance(
+    SCOPE,
+    NETWORK,
+    HORIZON_URL,
+    ASSET_ISSUER,
+    deployment.asset.issuer,
+    PAYER,
+    payerKey,
+    deployment.asset.code,
+    allowanceBaseUnits,
+  );
 
-  const payerSecret = execFileSync("stellar", ["keys", "secret", PAYER], { encoding: "utf-8" }).trim();
-  const merchantSecret = execFileSync("stellar", ["keys", "secret", MERCHANT], { encoding: "utf-8" }).trim();
-  const relayerSecret = execFileSync("stellar", ["keys", "secret", RELAYER], { encoding: "utf-8" }).trim();
+  const payerSecret = execFileSync("stellar", ["keys", "secret", PAYER], {
+    encoding: "utf-8",
+  }).trim();
+  const merchantSecret = execFileSync("stellar", ["keys", "secret", MERCHANT], {
+    encoding: "utf-8",
+  }).trim();
+  const relayerSecret = execFileSync("stellar", ["keys", "secret", RELAYER], {
+    encoding: "utf-8",
+  }).trim();
   const payerSigner = keypairSigner(payerSecret);
   const merchantSigner = keypairSigner(merchantSecret);
   const relayerSigner = keypairSigner(relayerSecret);
 
   const expirationLedger = (await fetchLatestLedgerSeq(deployment.rpcUrl)) + 200_000;
-  log(SCOPE, `payer approving ${allowanceBaseUnits.toString()} base units (bounded, never unlimited) to mandate contract`);
+  log(
+    SCOPE,
+    `payer approving ${allowanceBaseUnits.toString()} base units (bounded, never unlimited) to mandate contract`,
+  );
   stellarInvoke([
-    "contract", "invoke", "--id", deployment.asset.contractId, "--source", PAYER, "--network", NETWORK,
-    "--", "approve", "--from", payerKey, "--spender", deployment.contractId,
-    "--amount", allowanceBaseUnits.toString(), "--expiration_ledger", expirationLedger.toString(),
+    "contract",
+    "invoke",
+    "--id",
+    deployment.asset.contractId,
+    "--source",
+    PAYER,
+    "--network",
+    NETWORK,
+    "--",
+    "approve",
+    "--from",
+    payerKey,
+    "--spender",
+    deployment.contractId,
+    "--amount",
+    allowanceBaseUnits.toString(),
+    "--expiration_ledger",
+    expirationLedger.toString(),
   ]);
 
   const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
@@ -117,7 +186,7 @@ async function main(): Promise<void> {
     payer: payerKey,
     merchant: merchantKey,
     asset: deployment.asset.contractId,
-    amountRule: { kind: "fixed", amount: fixedAmountBaseUnits },
+    amountRule: { kind: "variable", maxPerCharge: maxPerChargeBaseUnits },
     maxPerPeriod: theoreticalMaxBaseUnits,
     periodSeconds: PERIOD_SECONDS,
     minIntervalSeconds: 0n,
@@ -128,12 +197,21 @@ async function main(): Promise<void> {
     clientNonce: hex32(),
   };
 
-  log(SCOPE, "creating mandate (payer signs and submits directly — unrelated to the relayer pipeline under test)");
-  const payerClient = createMandateRegistryClient(deployment, { publicKey: payerSigner.publicKey, signTransaction: payerSigner.signTransaction });
+  log(
+    SCOPE,
+    "creating mandate (payer signs and submits directly — unrelated to the relayer pipeline under test)",
+  );
+  const payerClient = createMandateRegistryClient(deployment, {
+    publicKey: payerSigner.publicKey,
+    signTransaction: payerSigner.signTransaction,
+  });
   const createTx = await buildCreateMandate(payerClient, mandateInput);
   const createSent = await submitAsInvoker(createTx);
   const mandateId = idToHex(createSent.result.unwrap());
-  log(SCOPE, `mandate id: ${mandateId} (create_mandate tx: ${String(createSent.sendTransactionResponse?.hash)})`);
+  log(
+    SCOPE,
+    `mandate id: ${mandateId} (create_mandate tx: ${String(createSent.sendTransactionResponse?.hash)})`,
+  );
 
   const mandateAfterCreate = await getMandate(payerClient, mandateId);
   log(SCOPE, `mandate status after create: ${mandateAfterCreate.status}`);
@@ -141,15 +219,17 @@ async function main(): Promise<void> {
   // --- From here on, everything goes through the real Phase 9 pipeline. ---
   const prisma = createPrismaClient();
   try {
-    const merchant = await prisma.merchant.create({ data: { name: "Testnet Demo Merchant (Phase 9)", walletAddress: merchantKey } });
+    const merchant = await prisma.merchant.create({
+      data: { name: "Testnet Demo Merchant (Phase 9)", walletAddress: merchantKey },
+    });
     const product = await prisma.product.create({
       data: {
         merchantId: merchant.id,
         name: "Phase 9 relayer demo product",
         assetAddress: deployment.asset.contractId,
         assetDecimals: ASSET_DECIMALS,
-        amountType: "fixed",
-        fixedAmount: fixedAmountBaseUnits.toString(),
+        amountType: "variable",
+        maxPerCharge: maxPerChargeBaseUnits.toString(),
         maxPerPeriod: theoreticalMaxBaseUnits.toString(),
         periodSeconds: Number(PERIOD_SECONDS),
         minIntervalSeconds: 0,
@@ -158,14 +238,20 @@ async function main(): Promise<void> {
       },
     });
     await prisma.checkoutSession.create({
-      data: { merchantId: merchant.id, productId: product.id, mandateId, expiresAt: new Date(Date.now() + 3_600_000), status: "completed" },
+      data: {
+        merchantId: merchant.id,
+        productId: product.id,
+        mandateId,
+        expiresAt: new Date(Date.now() + 3_600_000),
+        status: "completed",
+      },
     });
     const chargeRequest = await prisma.chargeRequest.create({
       data: {
         merchantId: merchant.id,
         mandateId,
         chargeId: hex32(),
-        amount: fixedAmountBaseUnits.toString(),
+        amount: successAmountBaseUnits.toString(),
         invoiceHash: hex32(),
         scheduledFor: new Date(),
       },
@@ -178,23 +264,106 @@ async function main(): Promise<void> {
       resolveMerchantSigner: () => merchantSigner, // demo-only — see module doc.
     });
 
-    log(SCOPE, "running the real relayer pipeline (processChargeRequest): claim -> fresh read -> build+simulate -> verify -> submit -> poll to final -> reconcile");
+    log(
+      SCOPE,
+      "running the real relayer pipeline (processChargeRequest): claim -> fresh read -> build+simulate -> verify -> submit -> poll to final -> reconcile",
+    );
     const outcome = await processChargeRequest(
-      { prisma, gateway, now: () => new Date(), logger: (level, event, fields) => log(SCOPE, `[${level}] ${event} ${JSON.stringify(fields)}`) },
+      {
+        prisma,
+        gateway,
+        now: () => new Date(),
+        logger: (level, event, fields) =>
+          log(SCOPE, `[${level}] ${event} ${JSON.stringify(fields)}`),
+      },
       chargeRequest.id,
     );
 
     console.log("\n=== Phase 9 relayer testnet proof — result ===");
     console.log(JSON.stringify(outcome, null, 2));
 
-    if (outcome.kind === "succeeded") {
-      const payment = await prisma.payment.findUniqueOrThrow({ where: { paymentId: outcome.paymentId } });
-      console.log(`payment.transactionHash: ${payment.transactionHash}`);
-      console.log(`payment.ledger: ${payment.ledger.toString()}`);
-      console.log(`mandate id: ${mandateId}`);
-    } else {
+    if (outcome.kind !== "succeeded") {
       throw new Error(`expected the pipeline to succeed, got: ${JSON.stringify(outcome)}`);
     }
+
+    const payment = await prisma.payment.findUniqueOrThrow({
+      where: { paymentId: outcome.paymentId },
+    });
+    console.log(`payment.transactionHash: ${payment.transactionHash}`);
+    console.log(`payment.ledger: ${payment.ledger.toString()}`);
+    console.log(`mandate id: ${mandateId}`);
+
+    log(SCOPE, "scene 2/4: requesting an over-limit charge — contract must block it");
+    const overLimitRequest = await prisma.chargeRequest.create({
+      data: {
+        merchantId: merchant.id,
+        mandateId,
+        chargeId: hex32(),
+        amount: overLimitAmountBaseUnits.toString(),
+        invoiceHash: hex32(),
+        scheduledFor: new Date(),
+      },
+    });
+    const overLimitOutcome = await processChargeRequest(
+      {
+        prisma,
+        gateway,
+        now: () => new Date(),
+        logger: (level, event, fields) =>
+          log(SCOPE, `[${level}] ${event} ${JSON.stringify(fields)}`),
+      },
+      overLimitRequest.id,
+    );
+    if (
+      overLimitOutcome.kind !== "permanently_failed" ||
+      overLimitOutcome.reason !== "AmountExceedsChargeLimit"
+    ) {
+      throw new Error(
+        `expected AmountExceedsChargeLimit, got: ${JSON.stringify(overLimitOutcome)}`,
+      );
+    }
+
+    log(SCOPE, "scene 3/4: revoking the mandate — payer signs, merchant approval not required");
+    const revokeTx = await buildRevokeMandate(payerClient, mandateId);
+    const revokeSent = await submitAsInvoker(revokeTx);
+    const revoked = await getMandate(payerClient, mandateId);
+    if (revoked.status !== "Revoked") {
+      throw new Error(`expected Revoked mandate status, got ${revoked.status}`);
+    }
+
+    log(SCOPE, "scene 4/4: retrying a valid amount after revocation — contract must block it");
+    const postRevokeRequest = await prisma.chargeRequest.create({
+      data: {
+        merchantId: merchant.id,
+        mandateId,
+        chargeId: hex32(),
+        amount: successAmountBaseUnits.toString(),
+        invoiceHash: hex32(),
+        scheduledFor: new Date(),
+      },
+    });
+    const postRevokeOutcome = await processChargeRequest(
+      {
+        prisma,
+        gateway,
+        now: () => new Date(),
+        logger: (level, event, fields) =>
+          log(SCOPE, `[${level}] ${event} ${JSON.stringify(fields)}`),
+      },
+      postRevokeRequest.id,
+    );
+    if (
+      postRevokeOutcome.kind !== "permanently_failed" ||
+      postRevokeOutcome.reason !== "MandateRevoked"
+    ) {
+      throw new Error(`expected MandateRevoked, got: ${JSON.stringify(postRevokeOutcome)}`);
+    }
+
+    console.log("\n=== Phase 15 protection scenes — PASS ===");
+    console.log(`success: ${outcome.txHash}`);
+    console.log(`over-limit: ${overLimitOutcome.reason}`);
+    console.log(`revoke: ${String(revokeSent.sendTransactionResponse?.hash)}`);
+    console.log(`post-revoke: ${postRevokeOutcome.reason}`);
   } finally {
     await prisma.$disconnect();
   }

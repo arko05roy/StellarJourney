@@ -8,10 +8,16 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "echo \"no build step: CLI scripts run directly via tsx\" && exit 0",
     "test": "echo \"no tests yet\" && exit 0",
+    "security:audit": "tsx audit-secrets.ts",
     "deploy:testnet": "tsx deploy-testnet.ts",
+    "demo:env": "tsx prepare-demo-env.ts",
+    "demo:seed": "tsx seed-demo.ts",
     "demo:mandate": "tsx create-demo-mandate.ts",
     "demo:relayer": "tsx run-relayer-testnet-demo.ts",
-    "verify:indexer": "tsx verify-indexer-testnet.ts"
+    "demo:scenes": "tsx run-relayer-testnet-demo.ts",
+    "verify:indexer": "tsx verify-indexer-testnet.ts",
+    "load:staging": "tsx load-staging.ts",
+    "stress:testnet": "tsx stress-test-testnet.ts"
   },
   "dependencies": {
     "@paymap/contract-client": "workspace:*",

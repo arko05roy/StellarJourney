@@ -21,6 +21,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { badRequest, forbiddenError, unauthorizedError } from "../errors.js";
 import type { ApiKey, Merchant, Prisma, PrismaClient } from "../db.js";
+import { ALL_API_KEY_SCOPES, assertValidScopes, type ApiKeyScope } from "./scopes.js";
 
 const KEY_PREFIX = "sk_live_";
 /** Long enough to make the indexed lookup highly selective without being long enough to leak meaningful entropy about the secret. */
@@ -55,7 +56,11 @@ export interface AuthenticatedMerchant {
  * revoked key is a known, named credential, not a guess), or a merchant
  * whose account itself is disabled.
  */
-export async function authenticateApiKey(prisma: PrismaClient, hashSecret: string, rawKey: string): Promise<AuthenticatedMerchant> {
+export async function authenticateApiKey(
+  prisma: PrismaClient,
+  hashSecret: string,
+  rawKey: string,
+): Promise<AuthenticatedMerchant> {
   if (!rawKey.startsWith(KEY_PREFIX) || rawKey.length < PREFIX_LOOKUP_LENGTH + 16) {
     throw unauthorizedError("INVALID_API_KEY", "Malformed API key.");
   }
@@ -66,18 +71,33 @@ export async function authenticateApiKey(prisma: PrismaClient, hashSecret: strin
   // Prefix collisions are astronomically unlikely with 24 random bytes of
   // entropy behind it, but the loop (rather than assuming exactly one row)
   // costs nothing and removes the assumption entirely.
-  const candidates = await prisma.apiKey.findMany({ where: { keyPrefix: prefix }, include: { merchant: true } });
+  const candidates = await prisma.apiKey.findMany({
+    where: { keyPrefix: prefix },
+    include: { merchant: true },
+  });
 
   for (const candidate of candidates) {
     const storedHash = Buffer.from(candidate.keyHash, "hex");
     if (storedHash.length === computedHash.length && timingSafeEqual(storedHash, computedHash)) {
       if (candidate.status !== "active") {
-        throw unauthorizedError("API_KEY_REVOKED", "This API key has been revoked. Rotate to a new key.");
+        throw unauthorizedError(
+          "API_KEY_REVOKED",
+          "This API key has been revoked. Rotate to a new key.",
+        );
       }
       if (candidate.merchant.status !== "active") {
         throw forbiddenError("MERCHANT_DISABLED", "This merchant account is disabled.");
       }
       const { merchant, ...apiKey } = candidate;
+      if (
+        candidate.lastUsedAt === null ||
+        Date.now() - candidate.lastUsedAt.getTime() >= 60 * 60 * 1000
+      ) {
+        await prisma.apiKey.update({
+          where: { id: candidate.id },
+          data: { lastUsedAt: new Date() },
+        });
+      }
       return { merchant, apiKey };
     }
   }
@@ -97,14 +117,25 @@ export interface IssuedApiKey {
 }
 
 /** Creates a merchant and issues its first API key. The raw key is returned once and never again — the caller must show it to the merchant now. */
-export async function createMerchantWithApiKey(prisma: PrismaClient, hashSecret: string, input: CreateMerchantInput): Promise<IssuedApiKey> {
+export async function createMerchantWithApiKey(
+  prisma: PrismaClient,
+  hashSecret: string,
+  input: CreateMerchantInput,
+): Promise<IssuedApiKey> {
   const { raw, prefix } = generateApiKey();
   const keyHash = hashApiKey(raw, hashSecret);
   const merchant = await prisma.merchant.create({
     data: {
       name: input.name,
       walletAddress: input.walletAddress,
-      apiKeys: { create: { keyPrefix: prefix, keyHash } },
+      apiKeys: {
+        create: {
+          keyPrefix: prefix,
+          keyHash,
+          name: "Default",
+          scopes: ALL_API_KEY_SCOPES,
+        },
+      },
     },
     include: { apiKeys: true },
   });
@@ -131,13 +162,47 @@ export async function rotateApiKey(
   const { raw, prefix } = generateApiKey();
   const keyHash = hashApiKey(raw, hashSecret);
   return prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    const current = await tx.apiKey.findFirstOrThrow({
+      where: { id: currentApiKeyId, merchantId },
+    });
     await tx.apiKey.update({
       where: { id: currentApiKeyId },
       data: { status: "revoked", revokedAt: new Date() },
     });
     const apiKey = await tx.apiKey.create({
-      data: { merchantId, keyPrefix: prefix, keyHash },
+      data: {
+        merchantId,
+        keyPrefix: prefix,
+        keyHash,
+        name: current.name,
+        scopes: current.scopes,
+      },
     });
     return { apiKey, rawApiKey: raw };
   });
+}
+
+export interface CreateScopedApiKeyInput {
+  name: string;
+  scopes: readonly ApiKeyScope[];
+}
+
+export async function createScopedApiKey(
+  prisma: PrismaClient,
+  hashSecret: string,
+  merchantId: string,
+  input: CreateScopedApiKeyInput,
+): Promise<RotatedApiKey> {
+  assertValidScopes(input.scopes);
+  const { raw, prefix } = generateApiKey();
+  const apiKey = await prisma.apiKey.create({
+    data: {
+      merchantId,
+      name: input.name,
+      scopes: [...input.scopes],
+      keyPrefix: prefix,
+      keyHash: hashApiKey(raw, hashSecret),
+    },
+  });
+  return { apiKey, rawApiKey: raw };
 }

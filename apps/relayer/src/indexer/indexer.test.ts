@@ -6,7 +6,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runIndexerTick, IndexerRetentionGapError } from "./indexer.js";
 import { getIndexerCursor } from "./cursor.js";
-import { buildLifecycleEvent, cleanDatabase, createMerchant, createTestPrisma, FakeChainEventsGateway, FakeChainGateway } from "../test/helpers.js";
+import {
+  buildLifecycleEvent,
+  cleanDatabase,
+  createMerchant,
+  createTestPrisma,
+  FakeChainEventsGateway,
+  FakeChainGateway,
+} from "../test/helpers.js";
 import type { PrismaClient } from "../db.js";
 import type { IndexerDeps } from "./indexer.js";
 
@@ -34,7 +41,11 @@ describe("runIndexerTick (real Postgres, fake chain-events gateway)", () => {
 
   it("first run: starts from currentLedger - lookback, processes events, and persists the cursor", async () => {
     const merchant = await createMerchant(prisma);
-    const event = buildLifecycleEvent({ kind: "mandate_created", merchant: merchant.walletAddress, ledger: 9_980 });
+    const event = buildLifecycleEvent({
+      kind: "mandate_created",
+      merchant: merchant.walletAddress,
+      ledger: 9_980,
+    });
     const gateway = new FakeChainEventsGateway([event], 10_000);
 
     const result = await runIndexerTick(deps(gateway, 50));
@@ -49,8 +60,18 @@ describe("runIndexerTick (real Postgres, fake chain-events gateway)", () => {
 
   it("resumes from the persisted cursor after a restart — never re-scans from the beginning", async () => {
     const merchant = await createMerchant(prisma);
-    const first = buildLifecycleEvent({ kind: "mandate_created", merchant: merchant.walletAddress, ledger: 100 });
-    const second = buildLifecycleEvent({ kind: "mandate_paused", merchant: merchant.walletAddress, mandateId: first.mandateId, payer: first.payer, ledger: 200 });
+    const first = buildLifecycleEvent({
+      kind: "mandate_created",
+      merchant: merchant.walletAddress,
+      ledger: 100,
+    });
+    const second = buildLifecycleEvent({
+      kind: "mandate_paused",
+      merchant: merchant.walletAddress,
+      mandateId: first.mandateId,
+      payer: first.payer,
+      ledger: 200,
+    });
     const gatewayRun1 = new FakeChainEventsGateway([first], 500);
     await runIndexerTick(deps(gatewayRun1));
 
@@ -65,7 +86,11 @@ describe("runIndexerTick (real Postgres, fake chain-events gateway)", () => {
 
   it("idempotent: re-running a tick with no new events past the cursor processes nothing further", async () => {
     const merchant = await createMerchant(prisma);
-    const event = buildLifecycleEvent({ kind: "mandate_created", merchant: merchant.walletAddress, ledger: 100 });
+    const event = buildLifecycleEvent({
+      kind: "mandate_created",
+      merchant: merchant.walletAddress,
+      ledger: 100,
+    });
     const gateway = new FakeChainEventsGateway([event], 500);
 
     await runIndexerTick(deps(gateway));
@@ -79,8 +104,21 @@ describe("runIndexerTick (real Postgres, fake chain-events gateway)", () => {
     const merchant = await createMerchant(prisma);
     const mandateId = "e".repeat(64);
     // Both events land in the *same* ledger — order must be exactly as returned by the gateway (created, then paused), never reversed.
-    const created = buildLifecycleEvent({ kind: "mandate_created", mandateId, merchant: merchant.walletAddress, ledger: 300, rpcEventId: "300-0" });
-    const paused = buildLifecycleEvent({ kind: "mandate_paused", mandateId, merchant: merchant.walletAddress, payer: created.payer, ledger: 300, rpcEventId: "300-1" });
+    const created = buildLifecycleEvent({
+      kind: "mandate_created",
+      mandateId,
+      merchant: merchant.walletAddress,
+      ledger: 300,
+      rpcEventId: "300-0",
+    });
+    const paused = buildLifecycleEvent({
+      kind: "mandate_paused",
+      mandateId,
+      merchant: merchant.walletAddress,
+      payer: created.payer,
+      ledger: 300,
+      rpcEventId: "300-1",
+    });
     const gateway = new FakeChainEventsGateway([created, paused], 500);
 
     await runIndexerTick(deps(gateway));
@@ -92,7 +130,11 @@ describe("runIndexerTick (real Postgres, fake chain-events gateway)", () => {
 
   it("two concurrent indexer instances processing overlapping ranges still produce exactly one webhook per on-chain event", async () => {
     const merchant = await createMerchant(prisma);
-    const event = buildLifecycleEvent({ kind: "mandate_created", merchant: merchant.walletAddress, ledger: 100 });
+    const event = buildLifecycleEvent({
+      kind: "mandate_created",
+      merchant: merchant.walletAddress,
+      ledger: 100,
+    });
     // Two independent gateway instances (simulating two separate relayer
     // processes with their own RPC connections) seeded with the identical
     // event stream, racing against the same DB with no cursor stored yet —
@@ -102,7 +144,9 @@ describe("runIndexerTick (real Postgres, fake chain-events gateway)", () => {
 
     await Promise.all([runIndexerTick(deps(gatewayA)), runIndexerTick(deps(gatewayB))]);
 
-    expect(await prisma.webhookDelivery.count({ where: { eventId: `chain:${event.rpcEventId}` } })).toBe(1);
+    expect(
+      await prisma.webhookDelivery.count({ where: { eventId: `chain:${event.rpcEventId}` } }),
+    ).toBe(1);
     expect(await prisma.mandateIndex.count()).toBe(1);
     const cursor = await getIndexerCursor(prisma);
     expect(cursor).toBeDefined();
@@ -110,12 +154,18 @@ describe("runIndexerTick (real Postgres, fake chain-events gateway)", () => {
 
   it("throws IndexerRetentionGapError and does not advance the cursor when the RPC call itself reports the position is gone", async () => {
     const merchant = await createMerchant(prisma);
-    const event = buildLifecycleEvent({ kind: "mandate_created", merchant: merchant.walletAddress, ledger: 100 });
+    const event = buildLifecycleEvent({
+      kind: "mandate_created",
+      merchant: merchant.walletAddress,
+      ledger: 100,
+    });
     const gateway = new FakeChainEventsGateway([event], 500);
     await runIndexerTick(deps(gateway)); // establishes a stored cursor
     const cursorBefore = await getIndexerCursor(prisma);
 
-    gateway.nextError = new Error("start ledger is before the oldest ledger this RPC server has data for");
+    gateway.nextError = new Error(
+      "start ledger is before the oldest ledger this RPC server has data for",
+    );
     await expect(runIndexerTick(deps(gateway))).rejects.toThrow(IndexerRetentionGapError);
 
     const cursorAfter = await getIndexerCursor(prisma);
@@ -124,7 +174,11 @@ describe("runIndexerTick (real Postgres, fake chain-events gateway)", () => {
 
   it("throws IndexerRetentionGapError when a successful response's oldestLedger has advanced past the last processed ledger", async () => {
     const merchant = await createMerchant(prisma);
-    const event = buildLifecycleEvent({ kind: "mandate_created", merchant: merchant.walletAddress, ledger: 100 });
+    const event = buildLifecycleEvent({
+      kind: "mandate_created",
+      merchant: merchant.walletAddress,
+      ledger: 100,
+    });
     const gateway = new FakeChainEventsGateway([event], 500);
     await runIndexerTick(deps(gateway));
 

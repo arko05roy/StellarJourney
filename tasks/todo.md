@@ -250,18 +250,18 @@ merchant product → checkout session → wallet auth → mandate creation
 → consumer payment history → revocation → later charge rejected
 ```
 
-**Gate:** `pnpm test:e2e` green against testnet or local Soroban.
+**Gate:** [x] `pnpm test:e2e:system` green against testnet.
 
 ---
 
 ## Phase 14 — Security Hardening
 
-- [ ] Write `docs/threat-model.md` — all 9 threats (PLAN.md §19) → mitigation → proving test
-- [ ] Adversarial suite (PLAN.md §20.5): relayer alters amount, merchant alters asset, charge-id reuse, concurrent workers, charge-vs-revoke race, period-boundary race, stale simulation
-- [ ] Secret audit: no keys in source, no secrets logged, testnet/local key separation
-- [ ] Structured logs with `mandateId/chargeId/merchantId/txHash/requestId`; redaction test
-- [ ] Observability counters (PLAN.md §21)
-- [ ] Rate limits verified under load
+- [x] Write `docs/threat-model.md` — all 9 threats (PLAN.md §19) → mitigation → proving test
+- [x] Adversarial suite (PLAN.md §20.5): relayer alters amount, merchant alters asset, charge-id reuse, concurrent workers, charge-vs-revoke race, period-boundary race, stale simulation
+- [x] Secret audit: no keys in source, no secrets logged, testnet/local key separation
+- [x] Structured logs with `mandateId/chargeId/merchantId/txHash/requestId`; redaction test
+- [x] Observability counters (PLAN.md §21)
+- [x] Rate limits verified under load
 
 **Gate:** zero open critical/high in internal checklist. Full command set from CLAUDE.md §15.
 
@@ -269,11 +269,11 @@ merchant product → checkout session → wallet auth → mandate creation
 
 ## Phase 15 — Demo Polish
 
-- [ ] `scripts/seed-demo.ts` — merchant, consumer, fixed plan, variable plan
-- [ ] Transaction timeline UI
-- [ ] Scripted demo scenes (PLAN.md §23): success → over-limit rejection → revocation → post-revoke rejection
-- [ ] `docs/demo-script.md` + architecture diagram
-- [ ] `README.md` one documented command sequence from clean env
+- [x] `scripts/seed-demo.ts` — merchant, consumer, fixed plan, variable plan
+- [x] Transaction timeline UI
+- [x] Scripted demo scenes (PLAN.md §23): success → over-limit rejection → revocation → post-revoke rejection
+- [x] `docs/demo-script.md` + architecture diagram
+- [x] `README.md` one documented command sequence from clean env
 
 **Gate:** clean-machine run reproduces full demo.
 
@@ -297,7 +297,57 @@ Note: PLAN.md §4 MVP example B mentions "pre-debit notice required 24h". MVP tr
 
 ## Review
 
-_(fill after each phase: what changed, commands run, what remains unverified)_
+### Active: Phases 13–15
+
+#### Plan
+
+- [x] Audit Phase 13 E2E chain and implement missing Playwright coverage.
+- [x] Complete Phase 14 threat model, adversarial tests, secret/log audits, counters, and load checks.
+- [x] Complete Phase 15 seed/demo timeline/scenes/docs/README.
+- [x] Validate wallet connect, deployment evidence, Stellar SDK integration, and frontend/contract function matching.
+
+#### Verification
+
+- [x] Run full TypeScript lint, typecheck, build, unit, and E2E gates.
+- [x] Run Rust fmt, clippy, tests, and optimized contract build.
+- [x] Inspect final diff and map every requirement to direct evidence.
+
+#### Files likely touched
+
+- `apps/web/e2e/`
+- `apps/web/src/`
+- `apps/api/src/`
+- `apps/relayer/src/`
+- `scripts/`
+- `docs/`
+- `README.md`
+- `tasks/todo.md`
+
+#### Questions
+
+- None.
+
+### Changed
+
+- Phase 13 real-testnet system E2E; SDK live error/Option decoding fixes.
+- Phase 14 threat model, adversarial/load tests, redacted logs, metrics, secret audit.
+- Phase 15 seed/bootstrap, transaction timeline, demo scenes, architecture/demo docs, README.
+
+### Verified
+
+- TS install/lint/typecheck/build/unit; Playwright stub 8/8 and system 1/1.
+- Rust fmt/clippy; 148 tests; optimized Wasm hash matches deployment.
+- Live demo seed idempotent; all four protection scenes pass.
+- Live deployed ABI: all 11 functions match generated client.
+
+### Risks
+
+- Production merchant authorization transport remains intentionally fail-closed.
+- Metrics are process-memory only; API keys are merchant-wide.
+
+### Follow-ups
+
+- Add external metrics sink and non-custodial merchant authorization transport before production.
 
 ### Phase 0 — Repository Foundation (done)
 
@@ -320,6 +370,7 @@ and `rust` job (fmt/clippy/test/wasm32v1-none release build). Six `docs/*.md` st
 `roadmap.md` recording the deferred items from this file's bottom section.
 
 **Commands run (all passed):**
+
 ```
 pnpm install
 pnpm lint
@@ -386,6 +437,7 @@ all mandate/payment ids) and to keep the checkout flow's collision-resistance ar
 a full 32-byte client-generated value rather than a narrower counter.
 
 **Commands run (all passed):**
+
 ```
 cargo fmt --all
 cargo fmt --all -- --check
@@ -429,13 +481,14 @@ no event" test; and an `env.auths()` inspection proving `create_mandate` genuine
 payer's authorization (not just "some" authorization).
 
 **Authorization proof method:** every wrong-signer test uses `env.mock_auths`/`MockAuth` with
-the auth mocked for the *wrong* address (merchant, a random third party standing in for "the
+the auth mocked for the _wrong_ address (merchant, a random third party standing in for "the
 relayer" — there's no on-chain relayer identity to mock, it has zero special authority per
 CLAUDE.md §11) and `#[should_panic]`, so the test fails specifically because the payer's
 `require_auth()` finds no matching entry — never `mock_all_auths`, which would hide a missing
 auth check entirely.
 
 **Judgment calls / deviations (flagged):**
+
 - Spec's example error names (`InvalidMandateInput`/`DuplicateMandate`/`InvalidStateTransition`)
   were adopted as-is at 21/22/23. `InvalidMandateInput` is a deliberate catch-all for every
   `create_mandate` bound except non-positive amounts (which reuses the existing `InvalidAmount`
@@ -453,6 +506,7 @@ auth check entirely.
   on-chain reflection of that invariant, not a shortcut.
 
 **Commands run (all passed):**
+
 ```
 cargo fmt --all
 cargo fmt --all -- --check
@@ -526,6 +580,7 @@ replay guard was never consumed by the failed attempt. This ran and passed; the 
 behavior was verified, not assumed.
 
 **Judgment calls / deviations (flagged):**
+
 - Step 4 (`now < expires_at` → `MandateExpired`) is, in almost every reachable case, already
   covered by step 2's `effective_status` check (an `Active`/`Paused` mandate past `expires_at`
   computes straight to `Expired` there). Implemented anyway, at its own ordinal position, as
@@ -541,6 +596,7 @@ behavior was verified, not assumed.
   keeping the test-fixture-seeding path (`mint`) simple. Both are documented in the module doc.
 
 **Commands run (all passed):**
+
 ```
 cargo fmt --all
 cargo fmt --all -- --check
@@ -562,7 +618,7 @@ CLAUDE.md §7 invariant→test mapping remains Phase 6's property-test suite.
 **What changed:** filled in `charge.rs`'s two Phase-3 no-op placeholders (validation steps 11-12)
 in place, without reordering anything: step 11 computes `period_index = floor((now - start_at) /
 period_seconds)` and the boundary `computed_period_start = start_at + period_index *
-period_seconds` (new `math::checked_mul_u64` helper), then derives the *effective*
+period_seconds` (new `math::checked_mul_u64` helper), then derives the _effective_
 `current_period_collected` for this charge by comparing `computed_period_start` directly against
 the stored `mandate.current_period_start` — chosen over deriving a stored index from
 `current_period_start`, since the boundary is the one value the `Mandate` actually persists (see
@@ -583,7 +639,7 @@ mock-token's own 7): two-charges-
 summing-to-cap-then-third-rejected; a single first-in-period charge exceeding the cap via a
 direct-storage-bypassed mandate (proving step 12 is independent of step 8, since
 `create_mandate` can never itself produce `max_per_period < per-charge cap`); rollover reset with
-an explicit assertion that `current_period_start` is the computed boundary and *not* `now`; the
+an explicit assertion that `current_period_start` is the computed boundary and _not_ `now`; the
 required boundary test (one second before a boundary still resolves to the old period and hits
 the cap; exactly at the boundary resolves to the new period and succeeds); a 5-period skip
 landing on the correct far-forward boundary (not `start_at + 1*period`); full completion
@@ -609,7 +665,7 @@ was verified against a genuine failing transfer, not assumed from the code alone
 
 **Deviation (unavoidable, correctly handled, not silent):** implementing completion surfaced a
 consequence the lead's brief didn't anticipate: once `successful_charges` reaches a non-zero
-`max_successful_charges`, the mandate completes *in the same charge that reached the cap*, so any
+`max_successful_charges`, the mandate completes _in the same charge that reached the cap_, so any
 following charge attempt now hits step 2's stored-`Completed` check before step 10's
 `ChargeCountExceeded` is ever reached. This makes the Phase 3 test
 `test_charge::charge_max_successful_charges_reached_rejected` — written when Phase 3 had no
@@ -628,6 +684,7 @@ how `current_period_start` was produced and matches what the struct actually per
 in `charge.rs`'s module doc and `docs/contract-invariants.md`.
 
 **Commands run (all passed):**
+
 ```
 cargo fmt --all
 cargo fmt --all -- --check
@@ -664,7 +721,7 @@ looping to exceed period caps in real economic terms).
 (persistent, same TTL policy as everything else). `events.rs` gained `RefundSucceeded` (full
 PLAN.md §11/§12-style field set: `refund_id`, `payment_id`, `mandate_id`, `payer`, `merchant`,
 `asset`, `amount`, `refunded_total_after`, `timestamp`). One new error code,
-`RefundNotFound = 24` — genuinely needed since `DuplicateRefund` (19) means the *opposite* thing
+`RefundNotFound = 24` — genuinely needed since `DuplicateRefund` (19) means the _opposite_ thing
 (already-used, not not-found) and reusing it would misreport one deterministic failure as
 another; error 16 `InsufficientBalance`'s doc comment was broadened (not renumbered) to note it
 now also covers the merchant's balance in `refund`, same advisory role as in `charge`. `lib.rs`
@@ -683,10 +740,10 @@ new tests, 9 total in that crate now).
 mock-token's own 9): full/partial refund success with balance assertions (payer restored,
 merchant debited, contract holds nothing); two partials summing to the exact payment amount both
 succeeding then a third of any positive amount rejected; single over-refund rejected; duplicate
-`refund_id` rejected both with a different amount against the *same* payment and against a
-*completely different* payment under the same mandate (proving the global, not per-payment,
+`refund_id` rejected both with a different amount against the _same_ payment and against a
+_completely different_ payment under the same mandate (proving the global, not per-payment,
 uniqueness scope); zero/negative amount rejected; unknown `payment_id` and unknown `mandate_id`
-rejected; a payment that belongs to a *different* mandate rejected with `PaymentNotFound`;
+rejected; a payment that belongs to a _different_ mandate rejected with `PaymentNotFound`;
 wrong-signer rejections for both the payer and a random third party (`env.mock_auths`, never
 `mock_all_auths`); the four required state-independence tests (revoked/paused/expired/completed,
 each charges once then transitions state before refunding); the two required headroom tests
@@ -734,6 +791,7 @@ Also made a small non-contract fix to the test-only `mock-token` crate (`transfe
 no-op; documented above and in `docs/contract-invariants.md`.
 
 **Commands run (all passed):**
+
 ```
 cargo fmt --all
 cargo fmt --all -- --check
@@ -766,7 +824,7 @@ results table, and an explicit "honest boundary" note for invariant 22.
 decision) drives 250 sequences x 20 ops by default (~5-7s, part of `cargo test --workspace`) and
 a `#[ignore]`d deep run of 3,000 sequences x 40 ops (~165s, manual invocation only) at
 `test_property::property_suite_deep`. Every sequence maintains a plain-Rust shadow model that
-re-implements the *exact* CLAUDE.md §6 validation order for `charge`/`refund` and the lifecycle
+re-implements the _exact_ CLAUDE.md §6 validation order for `charge`/`refund` and the lifecycle
 transition tables for `pause`/`resume`/`revoke` (including the real ordering asymmetry: `charge`
 checks status/time before `merchant.require_auth()`, while the lifecycle ops check
 `payer.require_auth()` first) — every op's predicted outcome is asserted against the real
@@ -780,15 +838,15 @@ reject with `DuplicateMandate` without corrupting the existing mandate.
 `invoke_contract` path (`transfer_from` calling back into `charge`, both same- and
 different-`charge_id` variants) is rejected **by the host itself**
 (`ContractReentryMode::Prohibited`, "Contract re-entry is not allowed") before any contract logic
-runs a second time — the rejection unwinds and aborts the *entire* outer `charge` invocation with
+runs a second time — the rejection unwinds and aborts the _entire_ outer `charge` invocation with
 it, so there is no partial-mutation window to find. This is a structural host guarantee, not
 something `mandate-registry` had to implement. Also proved and documented honestly: a lying token
-(`transfer_from` reports success, moves nothing) leaves the mandate's *own* books
+(`transfer_from` reports success, moves nothing) leaves the mandate's _own_ books
 self-consistent but cannot be prevented from lying about real value movement — the fundamental,
 unavoidable trust boundary with the configured asset contract (PLAN.md §18 invariant 22's honest
 limit, written up explicitly in `docs/contract-invariants.md` rather than overclaimed). An
 inflated pre-flight view (`balance`/`allowance` report `i128::MAX`) fools the advisory steps
-13/14 checks but the *real* transfer's own failure (and the accounting-mutates-only-after
+13/14 checks but the _real_ transfer's own failure (and the accounting-mutates-only-after
 discipline) still rolls back cleanly. Plus: charge-id reuse, charge-vs-revoke ordering, and an
 exact (not off-by-one either direction) period-boundary test.
 
@@ -805,6 +863,7 @@ capture specifically inside `test_property.rs`'s `run_sequence` via
 (including `test_adversarial.rs`) keeps the default and its snapshots are committed as usual.
 
 **Commands run (all passed):**
+
 ```
 cargo fmt --all
 cargo fmt --all -- --check
@@ -816,6 +875,7 @@ pnpm lint
 pnpm typecheck
 pnpm build
 ```
+
 Property suite measured separately: `property_suite_default` ~5-7s (part of the run above);
 `property_suite_deep` (`--ignored`, manual) ~165s for 3,000 sequences x 40 ops.
 
@@ -835,7 +895,7 @@ in-memory-cached) and will get a real concurrency proof once Phase 9's relayer l
 **What changed:** deployed `mandate-registry` to Stellar testnet for the first time, and built
 every TypeScript package the rest of the product depends on. `scripts/deploy-testnet.ts` builds +
 optimizes the wasm (`stellar contract build --package mandate-registry --optimize` — this
-optimizes *in place*, overwriting `mandate_registry.wasm`; the older two-step `contract
+optimizes _in place_, overwriting `mandate_registry.wasm`; the older two-step `contract
 optimize` command's separate `*.optimized.wasm` output is stale/deprecated, corrected after the
 first real run failed on the wrong path), uploads it, deploys a fresh instance, and idempotently
 ensures a real SEP-41 test asset exists: a classic asset `PUSD` issued by a repo-controlled
@@ -871,7 +931,7 @@ position and delegating to the base `authorizeEntry` with a real `Keypair` inste
 Soroban auth entry — with zero hand-rolled hashing/signing logic. `submit.ts` implements the two
 authorization flows: `submitAsInvoker` (payer signs and submits — `create_mandate`/
 `pause_mandate`/`resume_mandate`/`revoke_mandate`) and `submitAsRelayer` (merchant authorizes via
-`signAuthEntries`, a *separate* relayer identity submits and pays the fee — `charge`/`refund`),
+`signAuthEntries`, a _separate_ relayer identity submits and pays the fee — `charge`/`refund`),
 both refusing to proceed past an already-simulated `Result::Err` via `assertSimulatedOk`.
 
 `packages/shared`: `money.ts` (`decimalToBaseUnits`/`baseUnitsToDecimalString`/
@@ -895,6 +955,7 @@ the tx envelope and submits — that identity never touches the merchant's or pa
 point). Real results below.
 
 **Real testnet results:**
+
 - Network: `testnet` (`Test SDF Network ; September 2015`), RPC `https://soroban-testnet.stellar.org`
 - `mandate-registry` contract id: `CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22`
 - Wasm hash: `8b4f68e3f1ecb259d7cbb7153032ac8afbd279d1c5d4eb82ee0896c935e2832c` (26,857 bytes optimized)
@@ -912,7 +973,7 @@ point). Real results below.
   `15a0062ec4fd4cc9797c7f0ef5a97c64ac40795b153bb1c90e63d14ceb32ca0b`, amount 50,000,000 base units
   = 5.00 PUSD, merchant-authorized/relayer-submitted)
 - Mandate after charge: `status=Active successfulCharges=1/3 totalCollected=50000000
-  currentPeriodCollected=50000000` — read back through `getMandate`/`getPayment`, matching the
+currentPeriodCollected=50000000` — read back through `getMandate`/`getPayment`, matching the
   values `charge` returned in its own receipt exactly
 
 **Real SAC semantics vs. `mock-token`:** matched exactly. No divergence found — `approve`,
@@ -931,6 +992,7 @@ networkPassphrase, forAddress?)` signature that ignores the SDK's internally-con
 cryptography was hand-rolled anywhere in this path.
 
 **Commands run (all passed):**
+
 ```
 pnpm install
 pnpm lint
@@ -947,8 +1009,9 @@ tsx scripts/create-demo-mandate.ts    (real testnet create+charge, see results a
 ```
 
 **Deviations from spec (flagged, not silent):**
-- `packages/contract-client/tsconfig.json` scopes off two strict-config flags *for this package
-  only* (`lib` gains `"DOM"`, `noImplicitOverride: false`) — required for the generated bindings
+
+- `packages/contract-client/tsconfig.json` scopes off two strict-config flags _for this package
+  only_ (`lib` gains `"DOM"`, `noImplicitOverride: false`) — required for the generated bindings
   file to typecheck as-is; every other package keeps the base config's full strictness. Documented
   in the tsconfig itself and in `docs/architecture.md`.
 - `MandateSchema`'s `lastChargedAt` field skips the compile-time schema-matches-domain-type
@@ -982,7 +1045,7 @@ lifecycle exists in the spec and the states are identical in shape.
 **Generated Prisma client placement (deviation, verified necessary):** `generator client` in
 `prisma/schema.prisma` sets an explicit `output = "./generated/client"` rather than the classic
 `node_modules/@prisma/client` default. Verified necessary, not stylistic: with no `output`,
-`prisma generate` resolves `@prisma/client` relative to the *schema's* directory (repo root
+`prisma generate` resolves `@prisma/client` relative to the _schema's_ directory (repo root
 `prisma/`), and when unsatisfied there it shells out to `pnpm add @prisma/client@<version>` —
 which reliably failed every time with exit code 1 when that subprocess was itself spawned from
 inside another `pnpm run` invocation (this workspace's lockfile/store contention; running the
@@ -1005,9 +1068,9 @@ inserts the new one inside one `$transaction` — never a window with zero or tw
 
 **Idempotency concurrency-safety — a real bug found and fixed, not assumed correct:** the first
 implementation caught Prisma's `P2002` (unique-violation) from a plain `.create()` inside the
-transaction and then tried to `SELECT` the winning row in the *same* transaction — this reliably
+transaction and then tried to `SELECT` the winning row in the _same_ transaction — this reliably
 failed with Postgres error `25P02` ("current transaction is aborted") under the concurrency test,
-because a real constraint-violation error poisons the *entire* enclosing transaction, not just the
+because a real constraint-violation error poisons the _entire_ enclosing transaction, not just the
 one statement; every subsequent query in that transaction fails too. Fixed by replacing the insert
 with raw SQL: `INSERT ... ON CONFLICT ("merchantId", "key") DO NOTHING RETURNING id` — Postgres
 still applies the identical MVCC blocking rule (a concurrent transaction's insert of the same key
@@ -1029,7 +1092,7 @@ on a narrow `MandateReader` interface (`apps/api/src/chain/mandate-reader.ts`), 
 `@paymap/contract-client` directly — tests inject a fake, in-memory reader with canned mandate
 states instead of hitting real Soroban RPC; the production wrapper
 (`createChainMandateReader`) is a thin pass-through to `@paymap/contract-client`'s real
-simulation-backed reads. The precheck runs *before* the idempotency transaction (a pure read, so a
+simulation-backed reads. The precheck runs _before_ the idempotency transaction (a pure read, so a
 retry re-validating fresh state is strictly more correct than replaying a stale verdict).
 
 **ChargeRequest state machine:** `apps/api/src/state-machine.ts` — a pure guard table
@@ -1040,7 +1103,7 @@ never both apply). Exactly the edges CLAUDE.md §17 draws; Phase 8 only ever wri
 **Rate-limit bug found while testing, fixed:** `@fastify/rate-limit` (verified against its own
 source, `index.js:333`) does `throw params.errorResponseBuilder(req, respCtx)` **verbatim** — the
 custom builder's return value becomes the "error" Fastify's central error handler receives,
-*not* wrapped in an `Error` with `.statusCode` set automatically (only its own *default* builder
+_not_ wrapped in an `Error` with `.statusCode` set automatically (only its own _default_ builder
 does that). An initial custom builder returning `{code, message}` with no `statusCode` field was
 silently swallowed into the generic 500 branch instead of ever producing a 429. Fixed by including
 `statusCode: context.statusCode` in the builder's return value (mirroring what the plugin's own
@@ -1067,6 +1130,7 @@ job-level `DATABASE_URL` so `pnpm test` (now including `apps/api`'s real-Postgre
 unchanged in CI.
 
 **Commands run (all passed):**
+
 ```
 docker compose up -d
 pnpm install
@@ -1081,6 +1145,7 @@ cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-
 ```
 
 **Deviations from spec (flagged, not silent):**
+
 - Two endpoints beyond PLAN.md §14's literal list (`POST /v1/merchants`,
   `POST /v1/merchants/me/api-keys/rotate`) — necessary for CLAUDE.md §10's key issue/rotate
   requirement to be reachable at all. Documented in `docs/merchant-api.md`'s scope-note section.
@@ -1147,7 +1212,7 @@ already polls `getTransaction` to a final status internally (`SentTransaction.se
 `DEFAULT_TIMEOUT` = 5 minutes, verified by reading the SDK's own source at
 `node_modules/.pnpm/@stellar+stellar-sdk@16.1.0/.../sent_transaction.js`) — CLAUDE.md §11's "poll
 for final transaction status" step (7) did not need a hand-rolled polling loop; `submitAsRelayer`
-(already built in Phase 7) already returns a `SentTransaction` whose `.result` is the *confirmed*
+(already built in Phase 7) already returns a `SentTransaction` whose `.result` is the _confirmed_
 on-chain outcome, parsed from `getTransactionResponse.returnValue`, not the earlier simulation.
 This is also what "event reconciliation" (step 8) uses: the `Payment` row is written from this
 confirmed final `Result`, which carries the same trust level as parsing the `charge_succeeded`
@@ -1159,11 +1224,11 @@ built; flagged here rather than silently substituted.
 `apps/relayer` share one Postgres database (`docker-compose.yml`'s single `paymap` DB — one
 backend data model, CLAUDE.md §4, not a duplicate). Turbo's task graph has no ordering between
 `@paymap/api#test` and `@paymap/relayer#test` (only `dependsOn: ["^build"]`), so `pnpm test` from
-the repo root runs both real-Postgres suites *concurrently* — and both call a full
+the repo root runs both real-Postgres suites _concurrently_ — and both call a full
 `cleanDatabase()` at nearly every test's `beforeEach`. This produced real, observed FK-violation
 failures (one suite's cleanup deleting rows the other suite's in-flight test still needed) the
 first time the full gate ran with both suites present — not a hypothetical race. Fixed by giving
-`apps/relayer`'s tests a distinct Postgres *schema* (`relayer_test`, a namespace within the same
+`apps/relayer`'s tests a distinct Postgres _schema_ (`relayer_test`, a namespace within the same
 database — `apps/relayer/package.json`'s `test` script exports `DATABASE_URL` with
 `schema=relayer_test` before `prisma migrate deploy`/vitest; `vitest.setup.ts` defaults to the same
 for a bare `vitest` invocation). Full physical isolation, zero process-level coordination needed;
@@ -1173,32 +1238,34 @@ documented in `vitest.setup.ts`'s comment so a future phase doesn't reintroduce 
 `retryable` flag per contract error, never re-derives it; throws `UnclassifiableContractError`,
 never defaults to a retry, for any name outside the frozen 24):
 
-| permanent (14) | permanent (10, cont.) | transient (2) |
-| --- | --- | --- |
-| MandateNotFound | PaymentNotFound | InsufficientAllowance |
-| MandateNotActive | RefundExceedsPayment | InsufficientBalance |
-| MandatePaused | DuplicateRefund | |
-| MandateRevoked | ArithmeticOverflow | |
-| MandateCompleted | InvalidMandateInput | |
-| MandateExpired | DuplicateMandate | |
-| ChargeBeforeStart | InvalidStateTransition | |
-| ChargeTooSoon | RefundNotFound | |
-| InvalidAmount | | |
-| AmountExceedsChargeLimit | | |
-| AmountExceedsPeriodLimit | | |
-| ChargeCountExceeded | | |
-| DuplicateCharge | | |
-| UnauthorizedMerchant | | |
+| permanent (14)           | permanent (10, cont.)  | transient (2)         |
+| ------------------------ | ---------------------- | --------------------- |
+| MandateNotFound          | PaymentNotFound        | InsufficientAllowance |
+| MandateNotActive         | RefundExceedsPayment   | InsufficientBalance   |
+| MandatePaused            | DuplicateRefund        |                       |
+| MandateRevoked           | ArithmeticOverflow     |                       |
+| MandateCompleted         | InvalidMandateInput    |                       |
+| MandateExpired           | DuplicateMandate       |                       |
+| ChargeBeforeStart        | InvalidStateTransition |                       |
+| ChargeTooSoon            | RefundNotFound         |                       |
+| InvalidAmount            |                        |                       |
+| AmountExceedsChargeLimit |                        |                       |
+| AmountExceedsPeriodLimit |                        |                       |
+| ChargeCountExceeded      |                        |                       |
+| DuplicateCharge          |                        |                       |
+| UnauthorizedMerchant     |                        |                       |
 
 Plus three infra-observed conditions, always transient and never contract-error codes at all:
 `RPC_UNAVAILABLE`, `SEND_FAILED`, `TX_NOT_INCLUDED`.
 
 **Duplicate-delivery proof (the headline test) — real output:**
+
 ```
 ✓ src/pipeline.test.ts > processChargeRequest > duplicate job delivery — at most one successful
   charge > two concurrent processChargeRequest calls for the SAME ChargeRequest produce exactly
   one succeeded outcome, one Payment row, and one on-chain submit() call
 ```
+
 Two independent `PrismaClient` connections (simulating two separate worker processes) race
 `processChargeRequest` on the same `ChargeRequest` id via `Promise.all` against a real Postgres,
 sharing only the chain gateway (to count real "chain" calls). Asserted: exactly one `succeeded`
@@ -1207,12 +1274,13 @@ row. The guarantee is the DB-guarded `scheduled|retryable_failed -> processing` 
 BullMQ's own job locking, which this system deliberately does not rely on alone.
 
 **"Relayer cannot alter amount or destination" — how it was proven, two layers:**
-1. *Structural (on-chain, inherited from Phase 3/4/6):* `buildCharge` takes no merchant/destination
+
+1. _Structural (on-chain, inherited from Phase 3/4/6):_ `buildCharge` takes no merchant/destination
    argument at all — the contract reads the payout address only from stored `Mandate` state; `amount`
    is bound inside the merchant's Soroban authorization entry (hash includes function+args), so
    altering it after signing invalidates the signature. This was already proven by the Phase 3/4/6
    Rust test suites; Phase 9 depends on it rather than re-proving it.
-2. *Application-level, defense-in-depth, newly tested this phase:* `apps/relayer/src/pipeline.test.ts`'s
+2. _Application-level, defense-in-depth, newly tested this phase:_ `apps/relayer/src/pipeline.test.ts`'s
    "relayer cannot alter amount or destination" suite — a simulated receipt with a different
    merchant, an inflated amount, or a different asset than the `ChargeRequest`/`Product` describe is
    rejected (`SIMULATION_MISMATCH`, permanently failed) with `gateway.submitCallLog` asserted empty
@@ -1221,6 +1289,7 @@ BullMQ's own job locking, which this system deliberately does not rely on alone.
 **Real testnet run — actually executed, tx hash recorded:** `scripts/run-relayer-testnet-demo.ts`
 ran the real `createSorobanChainGateway` + `processChargeRequest` (the exact pipeline code the
 BullMQ worker runs, not a parallel one-off) against Stellar testnet:
+
 - mandate id: `17943c35498152a43ce01c3119dbfb340a0069877590af2a357d68223dbfff76`
 - `create_mandate` tx (payer signs/submits directly, Phase 7-style):
   `8e03653aeddaae57aa8f24176f2f5d51c395356fb97b1c8d75e3166ffbefd5d8`
@@ -1240,9 +1309,10 @@ rather than pretending to work; the required testnet proof script supplies the s
 merchant keypair Phase 7 already used (acceptable for a demo, not a production design). Full
 writeup: `docs/threat-model.md`'s "Open trust-model question: merchant charge authorization" entry.
 This did not block the phase's actual deliverable (the pipeline itself, fully built and tested) —
-it blocks only a *future* phase's move to real multi-merchant production wiring.
+it blocks only a _future_ phase's move to real multi-merchant production wiring.
 
 **Other deviations (flagged):**
+
 - Two additive schema changes beyond the literal brief: `ChargeRequest.nextAttemptAt` (necessary —
   the scheduler cannot find due retries without it) and the `retryable_failed -> processing` edge
   (explicitly anticipated by Phase 8's own review).
@@ -1255,6 +1325,7 @@ it blocks only a *future* phase's move to real multi-merchant production wiring.
   not from a separate contract-event subscription — see the SDK finding above.
 
 **Commands run (all passed):**
+
 ```
 docker compose up -d
 pnpm install
@@ -1273,10 +1344,10 @@ pnpm --filter @paymap/scripts run demo:relayer   (real testnet run, see tx hashe
 **Unverified / left for later phases:** no real BullMQ `Worker` process was run end-to-end against
 live jobs in this phase's tests (`worker.ts` is thin wiring around the already-tested
 `processChargeRequest`, exercised structurally but not via an actual running `Worker` consuming a
-real job in the test suite — `queue.ts`/`scheduler.ts` *are* tested against real Redis). A process
+real job in the test suite — `queue.ts`/`scheduler.ts` _are_ tested against real Redis). A process
 crash mid-poll (between the `submitted` DB write and `submit()`'s up-to-5-minute result) would
 leave a `ChargeRequest` stuck at `submitted` with no automatic recovery — no reconciliation sweep
-for stuck-`submitted` rows exists yet, flagged as a real gap for a future phase. Webhook *delivery*
+for stuck-`submitted` rows exists yet, flagged as a real gap for a future phase. Webhook _delivery_
 remains Phase 12 (this phase only enqueues `pending` rows, per CLAUDE.md's own step 10 scoping).
 Refund submission (mirroring `charge`) still does not exist — `RefundRequest` rows still never
 progress past `scheduled`, unchanged from the Phase 8 review's own note.
@@ -1307,7 +1378,7 @@ independently tested), `lib/{api,env,errors,format,ids,wallet,chain-gateway,test
 **Bounded allowance:** `computeBoundedAllowance(maxExposure)` = `maxExposure` + a disclosed 1%
 (`ALLOWANCE_FEE_HEADROOM_BPS = 100n`, rounded up) headroom, shown to the payer as its own line
 before signing. **Flagged, not fully resolved:** the brief's "small explicit fee headroom" wording
-is ambiguous about *why* a same-asset buffer is needed on top of an already-exact theoretical
+is ambiguous about _why_ a same-asset buffer is needed on top of an already-exact theoretical
 maximum (network fees are paid in XLM, not the approved asset) — implemented as a conservative,
 transparent, non-zero constant per the literal instruction, but the product rationale needs lead
 confirmation; 1% was my own judgment call, not derived from a spec number.
@@ -1317,6 +1388,7 @@ then a bounded `approve` on the product's asset contract (new `packages/stellar/
 the mandate-registry generated client only knows that one ABI; a SAC has no published Wasm to
 derive a spec from, so this drives `AssembledTransaction.build` directly). Failure modes, all
 handled explicitly (`lib/checkout-state.ts`'s reducer + `checkout-flow.tsx`):
+
 - Wallet rejection / insufficient balance / network error → classified by `lib/errors.ts::toDisplayError`
   into specific consumer-language messages (never generic), contract errors go through
   `@paymap/stellar`'s frozen table so the code is never lost.
@@ -1350,6 +1422,7 @@ nothing collapsed (proven by `terms-list.test.tsx`'s explicit "no `<details>`/`a
 `hidden` anywhere" assertion).
 
 **Backend additions this phase required (apps/api), not originally in Phase 10's file list:**
+
 1. Two new **unauthenticated** routes on `checkout-sessions.ts` — `GET .../public` and
    `POST .../mandate` — because the consumer browser never holds a merchant API key and no public
    read/write path existed for it. `POST .../mandate` independently re-verifies the mandate
@@ -1385,6 +1458,7 @@ Documented how to run it: `pnpm --filter @paymap/web test:e2e` (`playwright.conf
 webServers itself; browsers via `pnpm exec playwright install --with-deps chromium`, already run).
 
 **Commands run (all passed):**
+
 ```
 docker compose up -d
 pnpm install
@@ -1401,6 +1475,7 @@ cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-
 ```
 
 **Deviations flagged:**
+
 - The 1% fee-headroom basis-point figure is my own judgment call, not a spec-given number (see
   above) — needs lead confirmation.
 - `productAssetSymbol` (`checkout-flow.tsx`) renders a short truncated-address placeholder
@@ -1434,7 +1509,7 @@ error states, restrained motion, icon-library discipline).
 
 **Two data sources, one explicit trust hierarchy (CLAUDE.md §2):** a new unauthenticated
 `apps/api/src/routes/consumer.ts` (`GET /v1/consumer/mandates`, `GET /v1/consumer/payments`, both
-by `payerAddress`) is *discovery/enrichment only* — merchant display names, asset decimals (via the
+by `payerAddress`) is _discovery/enrichment only_ — merchant display names, asset decimals (via the
 existing `resolveAssetDecimalsForMandate`), a `cachedStatus` field deliberately named to signal
 "last known, not authoritative". Every field an actual mandate card renders (status, amounts,
 period usage, next eligible date) instead comes from a live `get_mandate` simulation call run
@@ -1446,9 +1521,10 @@ never calls that route, so a newly-created mandate would otherwise never be disc
 `apps/api` tests (`consumer.test.ts`) + 1 new `checkout-sessions.test.ts` assertion.
 
 **New pure/tested logic, `apps/web/src/lib`:**
+
 - `mandate-status.ts` — `deriveEffectiveStatus` (mirrors the contract's lazy-expiry rule, defense
   in depth over an already-computed live read), `computeEffectivePeriodUsage` (the period-usage
-  meter uses the *effective* period at "now", not raw stored fields, so an idle mandate never shows
+  meter uses the _effective_ period at "now", not raw stored fields, so an idle mandate never shows
   a stale "full" reading), `computeNextEligibleChargeDate` (the one PLAN.md §16.1 card field with no
   contract getter at all — two independent gates: the interval floor, and a period-allowance check
   that rolls forward to the next boundary when exhausted; exact for `Fixed`, conservative
@@ -1457,7 +1533,7 @@ never calls that route, so a newly-created mandate would otherwise never be disc
   transition table). 22 tests.
 - `failure-reasons.ts` — decodes a `ChargeRequest.failureCode` (all 24 frozen contract error codes
   from `packages/stellar`'s own table, plus the relayer's 3 infra-transient reasons) into
-  consumer-facing copy framed as *protection working*, not a scary error — distinct from
+  consumer-facing copy framed as _protection working_, not a scary error — distinct from
   `lib/errors.ts`'s checkout-flow copy, which frames the payer's own action failing. 5 tests incl. an
   exhaustive canary over the frozen 24-code table.
 - `revoke-flow.ts` — the "cancel autopay" state machine (discriminated union, mirrors
@@ -1491,7 +1567,7 @@ a standing risk even though the mandate itself now blocks charges) → `approve(
 3 `cancel-autopay-dialog.test.tsx` component tests (mocked gateway) and the Playwright flow.
 
 **Wallet-rejection / stale-state handling (explicit task requirement):** every `pause`/`resume`
-failure both surfaces an inline `ErrorBanner` on the card *and* triggers `refreshMandate` in a
+failure both surfaces an inline `ErrorBanner` on the card _and_ triggers `refreshMandate` in a
 `finally` block — if the mandate's on-chain state changed underneath the user (e.g. it was already
 revoked elsewhere), the card's controls re-derive from the fresh read on the next render rather than
 staying stale and clickable into a doomed retry.
@@ -1519,6 +1595,7 @@ Fixed once, centrally, in `vitest.setup.ts` (`afterEach(cleanup)`) — benefits 
 future component test file, not just the new ones. See `tasks/lessons.md`.
 
 **Commands run (all passed):**
+
 ```
 docker compose up -d
 pnpm install
@@ -1536,6 +1613,7 @@ cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-
 ```
 
 **Deviations flagged:**
+
 - "Upcoming" and "Active" currently share the same underlying filter (`status === "Active"`,
   different sort — soonest next-eligible-date vs. merchant name) rather than being two visibly
   distinct sets. PLAN.md §16.1 lists them as separate nav items without further specification; this
@@ -1570,6 +1648,7 @@ facing display/copy for that rejection, which `failure-reasons.test.ts` does.
 
 **Signing/encryption/SSRF primitives, `packages/shared`** (new, used by both `apps/api` and
 `apps/relayer`, and by `packages/sdk` for verification):
+
 - `webhook-signature.ts` — canonical string `{t}.{eventId}.{rawBody}`, HMAC-SHA256,
   `Paymap-Signature: t=…,id=…,v1=…` header, constant-time verify with a tolerance window (default
   300s, both directions).
@@ -1595,7 +1674,7 @@ deep-import-to-built-output convention as `ChargeRequest`'s). 43 new/updated `ap
 existing charge pipeline's wiring exactly) driving `webhook-delivery.ts`'s per-row pipeline: guarded
 DB claim → decrypt secret → assemble the envelope fresh from the row's own columns (the payload
 column stores only event `data`, never a redundant copy of the wrapper) → sign+send
-(`webhook-http.ts`, which re-runs the SSRF guard immediately before sending and *pins* the TCP
+(`webhook-http.ts`, which re-runs the SSRF guard immediately before sending and _pins_ the TCP
 connection to the pre-validated address via `undici`'s custom `Agent` lookup, closing the
 DNS-rebinding TOCTOU gap; redirects are never followed) → classify
 (`webhook-classify.ts`) → transition to `delivered`/`retry_scheduled`/`dead_letter`.
@@ -1623,7 +1702,7 @@ the caller omits one. 21 new tests.
 `node:crypto`/`node:dns`/`node:net` (from the three new webhook modules) reached the browser
 bundle through `@paymap/shared`'s root barrel, because a Client Component value-importing
 `decimalToBaseUnits`/`baseUnitsToDecimalString` from the bare package specifier drags in the
-barrel's *entire* re-export graph, not just the one function actually used (same class of bug
+barrel's _entire_ re-export graph, not just the one function actually used (same class of bug
 `packages/contract-client` hit and fixed in an earlier phase — see `tasks/lessons.md`). Fixed by
 adding narrow `./money`/`./types` subpath exports to `packages/shared/package.json` and updating
 the three `apps/web` call sites (`format.ts`, `mandate-terms.ts`, `payment-history-list.tsx`) to
@@ -1635,13 +1714,14 @@ build/tests unaffected otherwise.
 directly from `apps/web` (Phase 10/11 checkout + dashboard) — this API never observes them, and
 closing that gap needs either a real on-chain event indexer or new backend-notification wiring in
 `apps/web` (frontend work outside this phase's slice). `refund.succeeded` has no producer because
-no relayer pipeline exists yet that actually *submits* a refund transaction on-chain (Phase 8's
+no relayer pipeline exists yet that actually _submits_ a refund transaction on-chain (Phase 8's
 `POST /v1/payments/:id/refunds` only ever creates a `RefundRequest` row in `scheduled` — there is
 no "succeeded" to report). Full detail in `docs/merchant-api.md`'s "which events actually have a
 producer today" table. This mirrors the task brief's own explicit anticipation of this gap — not a
 surprise finding.
 
 **Commands run (all passed):**
+
 ```
 docker compose up -d
 pnpm install
@@ -1657,6 +1737,7 @@ cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-
 ```
 
 **Deviations flagged:**
+
 - Signature header is one combined `Paymap-Signature: t=…,id=…,v1=…` value (Stripe-style) rather
   than three separate headers — still carries all three required fields (timestamp, event id,
   signature version) per CLAUDE.md §12, just packed into one header. Documented precisely in
@@ -1696,7 +1777,7 @@ Webhooks — every one backed by a real endpoint, none a placeholder.
 `import "server-only"` — a real build-time guarantee, not a convention, that no `"use client"`
 file can ever import either module. `lib/no-secret-leak.test.ts` adds a second, faster static
 proof (14 tests): scans every Client Component under `app/merchant/**`/`components/merchant/**`
-for a *value* import (type-only imports are erased, not a leak) of either module. Every
+for a _value_ import (type-only imports are erased, not a leak) of either module. Every
 `app/merchant/**/page.tsx` is an `async` Server Component (`requireMerchantApiKey()` guard,
 `lib/merchant-guard.ts`) reading the key server-side; every mutation is a `"use server"` Server
 Action (`lib/merchant-actions.ts`) returning a discriminated `{ok:true,...}|{ok:false,error,...}`
@@ -1706,7 +1787,7 @@ itself is the identity, stored in an httpOnly/`sameSite:"lax"` cookie set either
 
 **Real bug found and fixed during development:** `connect/page.tsx` originally redirected away the
 instant a session cookie existed. Next.js re-renders a route's Server Components as part of the
-*same* action response when a Server Action mutates cookies — so `createMerchantAction`'s cookie
+_same_ action response when a Server Action mutates cookies — so `createMerchantAction`'s cookie
 write raced the client past the one-time API-key display before it could ever render. Fixed by
 making `/merchant/connect` the one page that never guards on cookie presence (documented in its
 own module doc) — every other page's guard is unaffected.
@@ -1741,7 +1822,8 @@ error states on every list view, dark mode inherited from the existing theme tok
 force landing-page-specific rules like hero/marquee/eyebrow guidance onto a data-dense dashboard).
 
 **Deviations / judgment calls (flagged):**
-- No "request a charge" or "submit a refund transaction" UI beyond the refund *request* form —
+
+- No "request a charge" or "submit a refund transaction" UI beyond the refund _request_ form —
   PLAN.md §16.3's dashboard scope is Products/Checkout links/Mandates/Collections/Payments/
   Refunds/Developers/Webhooks, not charge creation (that's the merchant's own backend integration
   via `@paymap/sdk`, PLAN.md §17). `docs/demo-script.md` updated to reflect this precisely.
@@ -1776,6 +1858,7 @@ concurrently with the happy-path test's own key-rotation step; caught by running
 not by inspection.
 
 **Commands run (all passed):**
+
 ```
 docker compose up -d
 pnpm install
@@ -1810,9 +1893,9 @@ mandate-registry contract's own lifecycle events, and stop `MandateIndex` from g
 payer acts directly from their wallet.
 
 - [x] `packages/contract-client/src/events.ts` (+ `./events` subpath export) — decodes the 5
-      `#[contractevent]`s into a typed `MandateLifecycleEvent` union, verified against
-      `soroban-sdk-macros-27.0.2`'s actual wire format (topics = `[name, mandate_id, payer,
-      merchant]`, data = a field-name-keyed `ScvMap`), not assumed.
+      `#[contractevent]`s into a typed `MandateLifecycleEvent` union. Verified against
+      `soroban-sdk-macros-27.0.2`'s actual wire format: topics contain name, mandate ID, payer,
+      and merchant; data is a field-name-keyed `ScvMap`.
 - [x] `packages/stellar/src/events.ts` — `fetchMandateLifecycleEvents`/`getCurrentLedgerSequence`,
       thin `rpc.Server.getEvents()` wrapper, imports `contract-client`'s `./events` subpath (not
       root) to avoid dragging `node:fs` into any browser bundle.
@@ -1864,6 +1947,7 @@ producing `MandateIndex.status = "Paused"` and exactly one `mandate.active` + on
 output captured in this phase's session transcript.
 
 **Commands run (all passed):**
+
 ```
 docker compose up -d
 pnpm install
@@ -1881,6 +1965,7 @@ cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-
 ```
 
 **Deviations / decisions:**
+
 - Chose **`IndexerCursor` as its own table** over `MandateIndex.lastIndexedLedger` — the poll cursor
   is a single global property of the whole contract's event stream, not per-mandate; folding it into
   a per-row field would mean every mandate row redundantly (and potentially inconsistently) carrying
@@ -1908,3 +1993,525 @@ actually days stale) — the heuristic error-matching path is untested against a
 only against a synthetic one in `indexer/indexer.test.ts`. `refund.succeeded` still has no producer
 (needs a relayer refund-execution pipeline, out of this phase's scope). No pagination or UI surface
 for indexer-produced events specifically beyond the existing webhook-deliveries list.
+
+---
+
+## Phase 16 — Production Readiness
+
+### Plan
+
+#### 1. Non-custodial merchant authorization transport — release blocker
+
+- [x] Add `ChargeAuthorization` persistence with merchant/charge binding, unsigned challenge XDR,
+      signed authorization-entry XDR, network, contract, expiry ledger, single-use status, and
+      timestamps. Encrypt the usable signed XDR at rest with a dedicated key.
+- [x] Split charge creation into a two-step API:
+      `POST /v1/mandates/:id/charge-authorizations` validates fresh chain state, fixes
+      `chargeId`/amount/invoice/schedule, simulates once to obtain the exact invocation tree, and
+      returns the Soroban authorization preimage plus display fields;
+      `POST /v1/charge-authorizations/:id/complete` verifies the merchant signature and atomically
+      creates the scheduled `ChargeRequest`.
+- [x] Add a merchant SDK helper that checks network, contract, method, signer, mandate, charge,
+      amount, invoice hash, and expiry before requesting wallet/backend signature. No secret key
+      crosses the API boundary.
+- [x] Rebuild the relayer transaction from DB-bound charge fields, attach only the stored signed
+      authorization entry before simulation, then retain the existing simulation/result
+      verification and relayer envelope-signing flow.
+- [x] Enforce authorization expiry, merchant ownership, exact invocation matching, one
+      authorization per charge, one-time consumption, and fail-closed behavior for missing,
+      malformed, replayed, or expired XDR.
+- [x] Add unit/integration/live-testnet coverage for valid transport, altered amount/destination/
+      invoice/contract/network, wrong signer, replay, expiry, concurrent consumption, relayer
+      restart, and no merchant secret in API/relayer storage or logs.
+
+#### 2. Persistent metrics and alerts
+
+- [x] Replace snapshot-only observability with Prometheus-compatible counters, gauges, and
+      histograms exposed by API and relayer HTTP endpoints; keep the existing `Observability`
+      interface as the application seam.
+- [x] Add persistent Prometheus storage, Alertmanager, dashboards, health/readiness endpoints, and
+      staging scrape configuration.
+- [x] Alert on API/relayer down, permanent charge failures, elevated retry/simulation/RPC failure
+      rates, settlement latency, webhook dead letters, indexer lag/retention gaps, queue backlog,
+      auth rejection anomalies, and API-key abuse.
+- [x] Add metric-label cardinality guards: never label by merchant, mandate, charge, transaction,
+      URL, secret, or raw error text.
+- [x] Verify restart durability, alert-rule syntax, health/readiness semantics, and one synthetic
+      firing/resolution path.
+
+#### 3. Scoped API keys and permissions
+
+- [x] Add API-key name, immutable scopes, last-used timestamp, and migration of existing keys to
+      full legacy access.
+- [x] Define stable scopes:
+      `products:{read,write}`, `checkout_sessions:{read,write}`, `mandates:read`,
+      `charges:{read,write}`, `payments:read`, `refunds:{read,write}`,
+      `webhooks:{read,write}`, and `api_keys:manage`.
+- [x] Extend auth prehandlers to require declared scopes and return stable `INSUFFICIENT_SCOPE`
+      errors without leaking resource existence.
+- [x] Add list/create/revoke key endpoints. Preserve scopes during rotation unless explicitly
+      replaced by a caller holding `api_keys:manage`; show raw keys once.
+- [x] Wire every merchant route to least privilege; update dashboard/SDK/docs.
+- [x] Test every route/scope pair, cross-merchant isolation, revoked keys, migration defaults,
+      self-revocation safety, and privilege-escalation attempts.
+
+#### 4. Nightly system E2E in CI
+
+- [x] Add scheduled and manually dispatchable GitHub Actions workflow for
+      `pnpm test:e2e:system` against Stellar testnet with Postgres/Redis services, Playwright
+      Chromium, concurrency control, timeout, artifact upload, and secret-safe logs.
+- [x] Keep pull-request CI deterministic; nightly live-network failures must not weaken normal CI.
+- [ ] Add failure notification through the selected alert destination and document required
+      repository secrets.
+
+#### 5. Staging deployment
+
+- [x] Add minimal production Dockerfiles for web, API, relayer, and migration job; run as non-root,
+      use health checks, immutable images, graceful shutdown, and no build-time secrets.
+- [x] Add staging infrastructure/config for managed Postgres and Redis, persistent monitoring,
+      TLS frontend/API, private relayer/metrics networking, secret injection, migration-before-
+      rollout, backup/restore, rollback, and separate testnet relayer account.
+- [x] Deploy the demo frontend to Vercel and combined API/relayer to Render Free; provision
+      Postgres/Key Value, fund a dedicated testnet relayer, run migrations, and verify health.
+- [ ] Run the full system E2E against deployed URLs and record final load/failure evidence.
+
+#### 6. Load and failure testing
+
+- [ ] Add reproducible load scenarios for API reads, idempotent charge authorization creation/
+      completion, scheduler throughput, queue backlog, webhook bursts, and metrics endpoints.
+- [ ] Add controlled failure scenarios for RPC timeout/5xx, Redis restart, Postgres connection
+      loss, relayer kill during each state transition, webhook 5xx/timeout, expired auth, and
+      indexer lag.
+- [x] Define staging safety limits and pass/fail budgets before execution: no double charge,
+      no lost terminal state, bounded recovery time, bounded p95/p99 latency, zero secret leakage,
+      and alerts fire/resume as expected.
+- [ ] Run baseline, load, soak, and failure tests on staging; store reports and document bottlenecks,
+      tuned limits, residual risks, rollback, and operator runbooks.
+
+### Verification
+
+- [x] `pnpm security:audit`
+- [x] `pnpm lint`
+- [x] `pnpm typecheck`
+- [x] `pnpm build`
+- [x] `pnpm test`
+- [x] `pnpm test:e2e`
+- [x] `pnpm test:e2e:system`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`
+- [x] Prisma migration tested from current schema and a clean database
+- [x] Docker images build and run as non-root; health/readiness checks pass
+- [x] Prometheus config/rules and Alertmanager config validate
+- [ ] Nightly workflow validates and manual dispatch passes
+- [x] Deployed frontend/API smoke checks pass
+- [ ] Deployed system E2E, load, soak, failure, backup/restore, and rollback checks pass
+- [x] Inspect `git diff` and confirm no unrelated changes or tracked secrets
+
+### Files likely touched
+
+- `prisma/schema.prisma`, `prisma/migrations/*`
+- `packages/config/src/*`, `packages/stellar/src/*`, `packages/sdk/src/*`
+- `apps/api/src/{app,index,auth,routes,schemas,services}/*`
+- `apps/relayer/src/{index,config,chain-gateway,pipeline,observability}*`
+- `apps/web/src/{app,components,lib}/*`
+- `.github/workflows/{ci,system-e2e-nightly}.yml`
+- `Dockerfile*`, `docker-compose*.yml`, `.dockerignore`, `ops/**/*`, `scripts/**/*`
+- `.env.example`, `README.md`, `docs/{architecture,merchant-api,threat-model,security-checklist,operations}.md`
+
+### Questions
+
+- [x] Architecture checkpoint: approve signed Soroban authorization-entry XDR transport,
+      Prometheus/Alertmanager, and the scope set above.
+- [x] Render selected; custom domain not required and alert email deferred. Dedicated testnet
+      relayer created and funded during deployment.
+
+### Review
+
+#### Changed
+
+- Added encrypted, invocation-bound merchant authorization transport and transparent SDK signing.
+- Added scoped API keys, persistent Prometheus/Alertmanager/Grafana monitoring, nightly live E2E,
+  Render staging infrastructure, production containers, runbooks, and bounded load/failure probes.
+
+#### Verified
+
+- Live Stellar testnet flow passed: checkout, mandate, signed non-custodial charge, webhook,
+  history, revoke, and deterministic `MandateRevoked` rejection.
+- Secret audit, lint, typecheck, builds, 642 TypeScript tests, 8 browser E2E tests, and 148 Rust
+  tests passed.
+- Final API/web/relayer image runs as non-root. Redis failure returned readiness 503 in 2.6 ms and
+  recovered to 200. Local 2,000-request load probe: 0 failures, p95 2.91 ms.
+- Prometheus config and 13 rules, synthetic firing/resolution, Alertmanager, and Actions workflow
+  syntax validated.
+- Vercel frontend is live at `https://paymap-web.vercel.app`; Render API/relayer is live at
+  `https://paymap-demo-api.onrender.com`. `/healthz`, `/readyz`, `/metrics`, `/merchant`, and
+  `/dashboard` returned 200.
+- Render sequential load probe: 100 requests, 0 failures, p95 133.02 ms.
+
+#### Risks
+
+- Render Free fails the 5-concurrency load budget: 500 requests, 16.4% platform-edge `404` responses
+  with `x-render-routing: no-server`, p95 130.32 ms for completed requests. Application logs show
+  handled requests completing with 200 and no process crash. Deployed E2E/soak remains incomplete.
+- Free Render Postgres expires after 30 days and has no backups; free Key Value is nonpersistent;
+  the web service sleeps after inactivity. This deployment is demo-only.
+- Submitted transactions with an unknown final ledger outcome alert for manual reconciliation;
+  automatic submitted-state reconciliation remains follow-up work.
+
+#### Follow-ups
+
+- Configure alert email later, per product decision.
+
+---
+
+## Phase 17 — Level 5 Submission
+
+### Plan
+
+- [x] Audit public repo, commit count, deployment, transaction evidence, and missing submission items.
+- [x] Create a professional pitch deck covering problem, solution, market, architecture, growth,
+      roadmap, and demo.
+- [x] Create an Excel feedback-analysis workbook for real Google Form exports; do not fabricate users
+      or responses.
+- [x] Add onboarding/feedback form specification and evidence collection instructions.
+- [x] Update README with live app, pitch deck, workbook, feedback iteration plan, commit links,
+      transaction proof, demo-video placeholder, and Level 5 checklist.
+- [x] Verify deck visuals, workbook formulas/layout, README links, repository gates, and clean diff.
+
+### Verification
+
+- [x] Repository public and 20+ meaningful commits
+- [x] Deck renders without overflow or overlap
+- [x] Workbook has no formula errors and all sheets render legibly
+- [x] README links resolve locally
+- [x] `pnpm exec prettier --check README.md docs/level-5/*.md tasks/todo.md`
+- [x] `git diff --check`
+
+### Review
+
+#### Changed
+
+- Added a nine-slide editable Level 5 pitch deck with presenter notes and source links.
+- Added a formula-backed Excel workbook for genuine Google Form exports, including validation,
+  duplicate-wallet highlighting, readiness gates, and a rating chart.
+- Added the exact Google Form specification, privacy/export rules, evidence tracker, and README
+  submission section.
+
+#### Verified
+
+- Public repository; 20+ commits before this phase and 21 after the artifact commit.
+- Deck rendered to nine slide images, visually inspected as a contact sheet, and passed
+  `slides_test.py`.
+- All three workbook sheets rendered; formula inspection contained no spreadsheet errors.
+- Frontend returned HTTP 200; Render API `/readyz` responded after the free-tier cold start.
+- Prettier and `git diff --check` passed.
+
+#### Risks
+
+- Level 5 is not honestly complete until 50 genuine users, verified per-user testnet activity, a
+  published demo video, analytics screenshots, and a product commit based on observed feedback exist.
+- The empty workbook is a collection/analysis tool, not user-growth proof.
+
+#### Follow-ups
+
+- Create the Google Form from the committed specification and collect the real cohort.
+- Paste or import the genuine export, verify transactions, and publish only redacted/aggregate proof.
+- Record/upload the walkthrough, implement the highest-impact observed issue, and add both links to
+  README.
+
+---
+
+## Phase 18 - Landing Page
+
+### Plan
+
+- [x] Audit the production root route, existing brand tokens, routes, shadcn configuration, and
+      frontend dependencies.
+- [x] Replace the Phase 0 stub with a responsive AIDA landing page using the requested design skills.
+- [x] Add a project-owned hero visual and isolated GSAP motion with reduced-motion fallbacks.
+- [x] Compose existing shadcn primitives for navigation actions, proof cards, and conversion CTAs.
+- [x] Add focused landing-page tests and update metadata.
+- [x] Verify lint, typecheck, tests, build, desktop/mobile visuals, reduced motion, copy rules, and
+      clean diff.
+
+### Verification
+
+- [x] `pnpm --filter @paymap/web lint`
+- [x] `pnpm --filter @paymap/web typecheck`
+- [x] `pnpm --filter @paymap/web test`
+- [x] `pnpm --filter @paymap/web build`
+- [x] Desktop and mobile screenshots inspected
+- [x] No placeholder copy, em dashes, horizontal overflow, or broken CTA routes
+- [x] `git diff --check`
+
+### Review
+
+#### Changed
+
+- Replaced the Phase 0 root stub with a complete responsive landing page.
+- Added two original Paymap visuals, an honest merchant-product screenshot, and WebP optimization.
+- Added GSAP hero, reveal, word-scrub, and sticky-stack motion with reduced-motion fallbacks.
+- Reworked semantic theme tokens around one cobalt accent and composed shadcn Button, Badge, Card,
+  and Separator primitives.
+- Added landing-page metadata and a focused route/copy regression test.
+
+#### Verified
+
+- Lint and typecheck pass.
+- Web test suite passes: 19 files, 133 tests.
+- Production build passes; `/` is statically rendered.
+- Desktop light/dark and mobile screenshots inspected; desktop hero is exactly two lines and page
+  width equals viewport width.
+- Sticky title and card stack verified after fixing the overflow ancestor.
+- Production Lighthouse: performance 97, accessibility 100, best practices 96, SEO 100; CLS 0 and
+  total blocking time 10 ms.
+
+#### Risks
+
+- The merchant screenshot reflects the current minimal merchant connection screen; replace it after
+  that product surface receives its own visual redesign.
+
+#### Follow-ups
+
+- Push the branch and allow Vercel to redeploy the new root route.
+
+---
+
+## Phase 19 - Merchant Wallet Authentication
+
+### Plan
+
+- [x] Add single-use, expiring merchant wallet challenges and opaque dashboard sessions.
+- [x] Verify Freighter signed messages against the configured Stellar network and exact challenge.
+- [x] Authenticate existing merchants by wallet; require verified wallet ownership before creating
+      a new merchant profile.
+- [x] Remove unauthenticated merchant bootstrap and API-key-as-dashboard-login behavior.
+- [x] Keep legacy API keys working for integrations while moving list/create/revoke scoped keys
+      into Developers.
+- [x] Replace merchant onboarding with connect wallet, sign in, and new-profile completion states.
+- [x] Update architecture, merchant API docs, environment examples, and focused security tests.
+- [x] Apply the Prisma migration, deploy API/web, and smoke-test the live authentication surface.
+
+### Verification
+
+- [x] Prisma migration applies to clean and current schemas
+- [x] API auth/challenge/session/scoped-key tests pass
+- [x] Web merchant onboarding and Developers tests pass
+- [x] `pnpm lint`
+- [x] `pnpm typecheck`
+- [x] `pnpm build`
+- [x] `pnpm test`
+- [x] `git diff --check`
+- [x] Render API ready and Vercel merchant routes return 200
+
+### Files likely touched
+
+- `prisma/schema.prisma`, `prisma/migrations/*`
+- `apps/api/src/auth/*`, `apps/api/src/routes/merchants*`, `apps/api/src/schemas/merchants*`
+- `apps/web/src/app/merchant/*`, `apps/web/src/components/merchant/*`
+- `apps/web/src/lib/{merchant-actions,merchant-api,merchant-guard,merchant-session}*`
+- `.env.example`, `docs/{architecture,merchant-api,threat-model}.md`
+
+### Questions
+
+- [x] Architecture: wallet-signed challenge for human sessions; scoped API keys remain
+      server-to-server credentials.
+
+### Review
+
+#### Changed
+
+- Replaced API-key dashboard login with Freighter wallet ownership challenges and 24-hour
+  httpOnly-backed merchant sessions.
+- Removed public merchant bootstrap; new profiles now require a verified payout wallet.
+- Added scoped integration-key list/create/revoke controls under Developers while preserving
+  existing API-key integrations.
+- Added challenge/session persistence, a production migration, configuration, docs, and E2E
+  coverage.
+- Bundled public contract deployment data into web server artifacts so Vercel merchant, checkout,
+  and dashboard routes do not depend on build-time filesystem paths.
+
+#### Verified
+
+- Prisma migration applied to both existing API and relayer test schemas; schema validation passes.
+- All 640 package tests and 8 Playwright flows pass.
+- Lint, typecheck, production build, and `git diff --check` pass.
+- Render is live on the wallet-auth commit; the challenge endpoint returns the expected Vercel
+  domain and the removed public merchant-bootstrap endpoint returns 404.
+- Vercel merchant sign-in and dashboard return 200; Developers redirects unauthenticated users to
+  wallet sign-in.
+
+#### Risks
+
+- Render's free service can cold-start slowly after inactivity.
+
+#### Follow-ups
+
+- None.
+
+---
+
+## Phase 22 - Main Branch Release Gate
+
+### Plan
+
+- [x] Fetch remote refs and inspect divergence from `main`.
+- [x] Run lint, typecheck, unit/integration tests, builds, E2E, Rust checks, and repository audits.
+- [x] Fix any failures at their root and rerun affected/full checks.
+- [ ] Commit the completed gate, merge production readiness into current `main`, and push.
+- [ ] Verify remote `main` contains the merge and the worktree is clean.
+
+### Verification
+
+- [x] `pnpm lint`
+- [x] `pnpm typecheck`
+- [x] `pnpm test`
+- [x] `pnpm build`
+- [x] `pnpm test:e2e`
+- [x] `pnpm test:e2e:system`
+- [x] `pnpm security:audit`
+- [x] `pnpm prisma:validate`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`
+- [x] `git diff --check`
+
+### Files likely touched
+
+- `tasks/todo.md`
+- Any files required to fix failing checks
+
+### Review
+
+#### Changed
+
+- Made Prisma validation deterministic when both supported local env files define `DATABASE_URL`.
+- Added the release gate and its verification record.
+
+#### Verified
+
+- All JavaScript/TypeScript lint, typecheck, test, build, browser E2E, security, and Prisma gates
+  pass.
+- Browser E2E passes 8/8.
+- Real Stellar testnet system E2E passes checkout, authorized charge, signed webhook, history,
+  revocation, and `MandateRevoked` protection.
+- Rust formatting, clippy with warnings denied, and all workspace tests pass.
+
+#### Risks
+
+- The production-readiness branch is 17 commits ahead of `origin/main`; remote main had no unique
+  commits when the gate began.
+
+#### Follow-ups
+
+- Merge and verify remote `main`.
+
+---
+
+## Phase 20 - Testnet Transaction Stress Run
+
+### Plan
+
+- [x] Validate the deployed testnet contract, asset, RPC, Horizon, and live API.
+- [x] Add a bounded CLI-driven stress runner using fresh payer and merchant accounts.
+- [x] Fund 12 accounts, establish PUSD trustlines/balances/allowances, and create 7 mandates.
+- [x] Execute 7 merchant-authorized charges through the production API and relayer.
+- [x] Verify about 52 unique testnet transaction hashes and all final charge/mandate states.
+- [x] Save a public evidence report containing addresses, hashes, timings, and failures only.
+
+### Verification
+
+- [x] Script lint and typecheck
+- [x] 12 distinct funded Stellar addresses
+- [x] About 52 successful, unique testnet transactions
+- [x] 7 relayed charges succeed on-chain
+- [x] Evidence report contains no secret keys or session credentials
+- [x] `git diff --check`
+
+### Files likely touched
+
+- `scripts/stress-test-testnet.ts`
+- `scripts/package.json`
+- `docs/level-5/evidence/testnet-stress-*.csv`
+- `tasks/todo.md`
+
+### Questions
+
+- [x] Scope: controlled Stellar testnet only; activity is stress-test evidence, not real-user proof.
+
+### Review
+
+#### Changed
+
+- Added a reusable opt-in testnet stress runner with isolated temporary CLI identities, bounded
+  allowances, wallet-authenticated merchant sessions, production API charge authorization, live
+  relayer execution, Horizon verification, and secret-free CSV evidence.
+- Submitted and verified 52 intended testnet transactions across 7 payer and 5 merchant accounts:
+  12 Friendbot fundings, 12 trustlines, 7 asset fundings, 7 allowances, 7 mandates, and 7 charges.
+
+#### Verified
+
+- All 52 intended hashes are unique and successful in Horizon.
+- All 7 charge requests reached `succeeded`; each mandate reports one successful charge and
+  1,000,000 base units collected.
+- Script typecheck/lint, evidence assertions, secret scan, and `git diff --check` pass.
+
+#### Risks
+
+- A stopped preflight attempt funded one additional disposable account before detecting a missing
+  explicit CLI network passphrase. No trustline, allowance, mandate, or charge followed; the
+  corrected run therefore produced about 53 total testnet transactions including that funding.
+- These are controlled load accounts, not genuine onboarded users.
+
+#### Follow-ups
+
+- Use the evidence report for technical stress proof only; collect 50 real users separately.
+
+---
+
+## Phase 21 - CSV Transaction Evidence
+
+### Plan
+
+- [x] Replace the JSON stress artifact with a one-row-per-transaction CSV.
+- [x] Make future testnet stress runs emit CSV directly.
+- [x] Update README and task documentation to reference the CSV artifact.
+
+### Verification
+
+- [x] CSV contains 52 data rows and 52 unique valid transaction hashes
+- [x] Every row includes phase, source address, and Stellar Expert link
+- [x] Script lint and typecheck
+- [x] JSON artifact removed
+- [x] `git diff --check`
+
+### Files likely touched
+
+- `scripts/stress-test-testnet.ts`
+- `docs/level-5/evidence/testnet-stress-20260730045306-585217.csv`
+- `README.md`
+- `tasks/todo.md`
+
+### Review
+
+#### Changed
+
+- Replaced the stress-run JSON with a spreadsheet-ready CSV containing one transaction per row.
+- Updated the stress runner and README to emit and link CSV evidence by default.
+
+#### Verified
+
+- CSV has 52 data rows, 52 unique 64-character hashes, and eight fields per row.
+- Phase totals remain 12 fundings, 12 trustlines, 7 asset fundings, 7 allowances, 7 mandates, and
+  7 relayed charges.
+- Every row is marked successful and includes its source address and direct Stellar Expert URL.
+- Script lint/typecheck, secret scan, JSON-removal check, and `git diff --check` pass.
+
+#### Risks
+
+- The CSV intentionally contains only public testnet metadata.
+
+#### Follow-ups
+
+- None.

@@ -2,9 +2,9 @@
  * Server-only typed client for the merchant-authenticated `/v1/*` API
  * (`apps/api/src/routes/*`). `import "server-only"` (see
  * `merchant-session.ts`'s identical comment) makes it a build error for any
- * Client Component to import this module — the only way an API key ever
- * reaches these functions is as a plain argument passed in from a Server
- * Component or Server Action that read it from the httpOnly cookie.
+ * Client Component to import this module. Human dashboard calls use the
+ * opaque merchant session from an httpOnly cookie; scoped API keys are only
+ * shown once when explicitly created for an integration.
  *
  * Every response is parsed with Zod (CLAUDE.md §5/§10) — nothing downstream
  * trusts an unvalidated network response, mirroring `lib/api.ts`'s
@@ -27,14 +27,18 @@ export class MerchantApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "DELETE";
   apiKey?: string;
   body?: unknown;
   idempotencyKey?: string;
   query?: Record<string, string | undefined>;
 }
 
-async function merchantFetch<T>(path: string, options: RequestOptions, schema: z.ZodType<T>): Promise<T> {
+async function merchantFetch<T>(
+  path: string,
+  options: RequestOptions,
+  schema: z.ZodType<T>,
+): Promise<T> {
   const url = new URL(`${env.NEXT_PUBLIC_API_URL}/v1${path}`);
   for (const [key, value] of Object.entries(options.query ?? {})) {
     if (value !== undefined) url.searchParams.set(key, value);
@@ -54,9 +58,15 @@ async function merchantFetch<T>(path: string, options: RequestOptions, schema: z
   const json: unknown = await response.json().catch(() => undefined);
 
   if (!response.ok) {
-    const code = typeof json === "object" && json !== null && "code" in json && typeof json.code === "string" ? json.code : "UNKNOWN_ERROR";
+    const code =
+      typeof json === "object" && json !== null && "code" in json && typeof json.code === "string"
+        ? json.code
+        : "UNKNOWN_ERROR";
     const message =
-      typeof json === "object" && json !== null && "message" in json && typeof json.message === "string"
+      typeof json === "object" &&
+      json !== null &&
+      "message" in json &&
+      typeof json.message === "string"
         ? json.message
         : `Request failed with status ${String(response.status)}`;
     throw new MerchantApiError(response.status, code, message);
@@ -71,28 +81,141 @@ function newIdempotencyKey(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Merchant bootstrap + API keys (unauthenticated create, then Bearer for rotate)
+// Wallet authentication + merchant profile
 // ---------------------------------------------------------------------------
 
-const CreateMerchantResponseSchema = z.object({
+const MerchantAuthChallengeSchema = z.object({
+  challengeId: z.string(),
+  message: z.string(),
+  networkPassphrase: z.string(),
+  expiresAt: z.string(),
+});
+export type MerchantAuthChallenge = z.infer<typeof MerchantAuthChallengeSchema>;
+
+export async function createMerchantAuthChallenge(
+  walletAddress: string,
+): Promise<MerchantAuthChallenge> {
+  return merchantFetch(
+    "/merchant-auth/challenges",
+    { method: "POST", body: { walletAddress } },
+    MerchantAuthChallengeSchema,
+  );
+}
+
+const MerchantAuthResultSchema = z.object({
+  sessionToken: z.string(),
+  expiresAt: z.string(),
+  profileRequired: z.boolean(),
+  merchant: z.object({ id: z.string(), name: z.string(), walletAddress: z.string() }).optional(),
+});
+export type MerchantAuthResult = z.infer<typeof MerchantAuthResultSchema>;
+
+export async function completeMerchantAuth(input: {
+  challengeId: string;
+  message: string;
+  signature: string;
+  signerAddress: string;
+}): Promise<MerchantAuthResult> {
+  return merchantFetch(
+    "/merchant-auth/complete",
+    { method: "POST", body: input },
+    MerchantAuthResultSchema,
+  );
+}
+
+const MerchantProfileSchema = z.object({
   merchantId: z.string(),
   name: z.string(),
   walletAddress: z.string(),
-  apiKeyId: z.string(),
-  apiKey: z.string(),
 });
-export type CreateMerchantResponse = z.infer<typeof CreateMerchantResponseSchema>;
+export type MerchantProfile = z.infer<typeof MerchantProfileSchema>;
 
-/** Bootstrap — unauthenticated by design (CLAUDE.md §10, PLAN.md §14 has no separate signup endpoint; `apps/api/src/routes/merchants.ts` is the addition that makes issuing a first key possible at all). */
-export async function createMerchant(input: { name: string; walletAddress: string }): Promise<CreateMerchantResponse> {
-  return merchantFetch("/merchants", { method: "POST", body: input }, CreateMerchantResponseSchema);
+export async function registerMerchantProfile(
+  sessionToken: string,
+  name: string,
+): Promise<MerchantProfile> {
+  return merchantFetch(
+    "/merchant-auth/register",
+    { method: "POST", apiKey: sessionToken, body: { name } },
+    MerchantProfileSchema,
+  );
 }
 
-const RotateApiKeyResponseSchema = z.object({ apiKeyId: z.string(), apiKey: z.string(), revokedApiKeyId: z.string() });
-export type RotateApiKeyResponse = z.infer<typeof RotateApiKeyResponseSchema>;
+export async function logoutMerchantSession(sessionToken: string): Promise<void> {
+  return merchantFetch(
+    "/merchant-auth/logout",
+    { method: "POST", apiKey: sessionToken },
+    z.undefined(),
+  );
+}
 
-export async function rotateApiKey(apiKey: string): Promise<RotateApiKeyResponse> {
-  return merchantFetch("/merchants/me/api-keys/rotate", { method: "POST", apiKey }, RotateApiKeyResponseSchema);
+// ---------------------------------------------------------------------------
+// Scoped integration API keys
+// ---------------------------------------------------------------------------
+
+export const MerchantApiKeyScopeSchema = z.enum([
+  "products:read",
+  "products:write",
+  "checkout_sessions:read",
+  "checkout_sessions:write",
+  "mandates:read",
+  "charges:read",
+  "charges:write",
+  "payments:read",
+  "refunds:read",
+  "refunds:write",
+  "webhooks:read",
+  "webhooks:write",
+  "api_keys:manage",
+]);
+export type MerchantApiKeyScope = z.infer<typeof MerchantApiKeyScopeSchema>;
+
+const MerchantApiKeySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  keyPrefix: z.string(),
+  scopes: z.array(MerchantApiKeyScopeSchema),
+  status: z.enum(["active", "revoked"]),
+  lastUsedAt: z.string().optional(),
+  createdAt: z.string(),
+  revokedAt: z.string().optional(),
+});
+export type MerchantApiKey = z.infer<typeof MerchantApiKeySchema>;
+
+export async function listMerchantApiKeys(sessionToken: string): Promise<MerchantApiKey[]> {
+  const { data } = await merchantFetch(
+    "/merchants/me/api-keys",
+    { apiKey: sessionToken },
+    z.object({ data: z.array(MerchantApiKeySchema) }),
+  );
+  return data;
+}
+
+const CreateMerchantApiKeyResponseSchema = z.object({
+  apiKeyId: z.string(),
+  name: z.string(),
+  scopes: z.array(MerchantApiKeyScopeSchema),
+  apiKey: z.string(),
+});
+export type CreateMerchantApiKeyResponse = z.infer<typeof CreateMerchantApiKeyResponseSchema>;
+
+export async function createMerchantApiKey(
+  sessionToken: string,
+  input: { name: string; scopes: MerchantApiKeyScope[] },
+): Promise<CreateMerchantApiKeyResponse> {
+  return merchantFetch(
+    "/merchants/me/api-keys",
+    { method: "POST", apiKey: sessionToken, body: input },
+    CreateMerchantApiKeyResponseSchema,
+  );
+}
+
+export async function revokeMerchantApiKey(sessionToken: string, apiKeyId: string): Promise<void> {
+  return merchantFetch(
+    `/merchants/me/api-keys/${encodeURIComponent(apiKeyId)}`,
+    { method: "DELETE", apiKey: sessionToken },
+    z.undefined(),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +242,11 @@ const ProductSchema = z.object({
 export type MerchantProduct = z.infer<typeof ProductSchema>;
 
 export async function listProducts(apiKey: string): Promise<MerchantProduct[]> {
-  const { data } = await merchantFetch("/products", { apiKey }, z.object({ data: z.array(ProductSchema) }));
+  const { data } = await merchantFetch(
+    "/products",
+    { apiKey },
+    z.object({ data: z.array(ProductSchema) }),
+  );
   return data;
 }
 
@@ -138,7 +265,10 @@ export interface CreateProductInput {
   defaultDurationSeconds: number;
 }
 
-export async function createProduct(apiKey: string, input: CreateProductInput): Promise<MerchantProduct> {
+export async function createProduct(
+  apiKey: string,
+  input: CreateProductInput,
+): Promise<MerchantProduct> {
   return merchantFetch("/products", { method: "POST", apiKey, body: input }, ProductSchema);
 }
 
@@ -159,7 +289,10 @@ const CheckoutSessionSchema = z.object({
 });
 export type MerchantCheckoutSession = z.infer<typeof CheckoutSessionSchema>;
 
-export async function listCheckoutSessions(apiKey: string, options: { productId?: string } = {}): Promise<MerchantCheckoutSession[]> {
+export async function listCheckoutSessions(
+  apiKey: string,
+  options: { productId?: string } = {},
+): Promise<MerchantCheckoutSession[]> {
   const { data } = await merchantFetch(
     "/checkout-sessions",
     { apiKey, query: { productId: options.productId } },
@@ -168,8 +301,15 @@ export async function listCheckoutSessions(apiKey: string, options: { productId?
   return data;
 }
 
-export async function createCheckoutSession(apiKey: string, input: { productId: string; clientReference?: string }): Promise<MerchantCheckoutSession> {
-  return merchantFetch("/checkout-sessions", { method: "POST", apiKey, body: input, idempotencyKey: newIdempotencyKey() }, CheckoutSessionSchema);
+export async function createCheckoutSession(
+  apiKey: string,
+  input: { productId: string; clientReference?: string },
+): Promise<MerchantCheckoutSession> {
+  return merchantFetch(
+    "/checkout-sessions",
+    { method: "POST", apiKey, body: input, idempotencyKey: newIdempotencyKey() },
+    CheckoutSessionSchema,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -205,12 +345,21 @@ export type MerchantMandate = z.infer<typeof MandateSchema>;
 
 const MandateListRowSchema = z.union([
   z.object({ live: z.literal(true), mandateId: z.string(), mandate: MandateSchema }),
-  z.object({ live: z.literal(false), mandateId: z.string(), cachedStatus: z.string(), lastIndexedAt: z.string().optional() }),
+  z.object({
+    live: z.literal(false),
+    mandateId: z.string(),
+    cachedStatus: z.string(),
+    lastIndexedAt: z.string().optional(),
+  }),
 ]);
 export type MerchantMandateListRow = z.infer<typeof MandateListRowSchema>;
 
 export async function listMandates(apiKey: string): Promise<MerchantMandateListRow[]> {
-  const { data } = await merchantFetch("/mandates", { apiKey }, z.object({ data: z.array(MandateListRowSchema) }));
+  const { data } = await merchantFetch(
+    "/mandates",
+    { apiKey },
+    z.object({ data: z.array(MandateListRowSchema) }),
+  );
   return data;
 }
 
@@ -229,7 +378,15 @@ const ChargeRequestSchema = z.object({
   amount: z.string(),
   invoiceHash: z.string(),
   scheduledFor: z.string(),
-  status: z.enum(["scheduled", "processing", "simulated", "submitted", "succeeded", "retryable_failed", "permanently_failed"]),
+  status: z.enum([
+    "scheduled",
+    "processing",
+    "simulated",
+    "submitted",
+    "succeeded",
+    "retryable_failed",
+    "permanently_failed",
+  ]),
   attemptCount: z.number().int(),
   failureCode: z.string().optional(),
   transactionHash: z.string().optional(),
@@ -237,7 +394,10 @@ const ChargeRequestSchema = z.object({
 });
 export type MerchantChargeRequest = z.infer<typeof ChargeRequestSchema>;
 
-export async function listCharges(apiKey: string, options: { status?: string[]; mandateId?: string } = {}): Promise<MerchantChargeRequest[]> {
+export async function listCharges(
+  apiKey: string,
+  options: { status?: string[]; mandateId?: string } = {},
+): Promise<MerchantChargeRequest[]> {
   const { data } = await merchantFetch(
     "/charges",
     { apiKey, query: { status: options.status?.join(","), mandateId: options.mandateId } },
@@ -263,8 +423,15 @@ const PaymentSchema = z.object({
 });
 export type MerchantPayment = z.infer<typeof PaymentSchema>;
 
-export async function listPayments(apiKey: string, options: { mandateId?: string } = {}): Promise<MerchantPayment[]> {
-  const { data } = await merchantFetch("/payments", { apiKey, query: { mandateId: options.mandateId } }, z.object({ data: z.array(PaymentSchema) }));
+export async function listPayments(
+  apiKey: string,
+  options: { mandateId?: string } = {},
+): Promise<MerchantPayment[]> {
+  const { data } = await merchantFetch(
+    "/payments",
+    { apiKey, query: { mandateId: options.mandateId } },
+    z.object({ data: z.array(PaymentSchema) }),
+  );
   return data;
 }
 
@@ -273,18 +440,37 @@ const RefundRequestSchema = z.object({
   paymentId: z.string(),
   refundId: z.string(),
   amount: z.string(),
-  status: z.enum(["scheduled", "processing", "simulated", "submitted", "succeeded", "retryable_failed", "permanently_failed"]),
+  status: z.enum([
+    "scheduled",
+    "processing",
+    "simulated",
+    "submitted",
+    "succeeded",
+    "retryable_failed",
+    "permanently_failed",
+  ]),
   transactionHash: z.string().optional(),
   createdAt: z.string(),
 });
 export type MerchantRefundRequest = z.infer<typeof RefundRequestSchema>;
 
-export async function listRefunds(apiKey: string, options: { paymentId?: string } = {}): Promise<MerchantRefundRequest[]> {
-  const { data } = await merchantFetch("/refunds", { apiKey, query: { paymentId: options.paymentId } }, z.object({ data: z.array(RefundRequestSchema) }));
+export async function listRefunds(
+  apiKey: string,
+  options: { paymentId?: string } = {},
+): Promise<MerchantRefundRequest[]> {
+  const { data } = await merchantFetch(
+    "/refunds",
+    { apiKey, query: { paymentId: options.paymentId } },
+    z.object({ data: z.array(RefundRequestSchema) }),
+  );
   return data;
 }
 
-export async function createRefund(apiKey: string, paymentId: string, amount: string): Promise<MerchantRefundRequest> {
+export async function createRefund(
+  apiKey: string,
+  paymentId: string,
+  amount: string,
+): Promise<MerchantRefundRequest> {
   return merchantFetch(
     `/payments/${encodeURIComponent(paymentId)}/refunds`,
     { method: "POST", apiKey, body: { amount }, idempotencyKey: newIdempotencyKey() },
@@ -296,19 +482,32 @@ export async function createRefund(apiKey: string, paymentId: string, amount: st
 // Webhooks
 // ---------------------------------------------------------------------------
 
-const WebhookEndpointStatusSchema = z.object({ configured: z.boolean(), webhookUrl: z.string().optional() });
+const WebhookEndpointStatusSchema = z.object({
+  configured: z.boolean(),
+  webhookUrl: z.string().optional(),
+});
 export type WebhookEndpointStatus = z.infer<typeof WebhookEndpointStatusSchema>;
 
 export async function getWebhookEndpointStatus(apiKey: string): Promise<WebhookEndpointStatus> {
   return merchantFetch("/webhook-endpoints", { apiKey }, WebhookEndpointStatusSchema);
 }
 
-const RegisterWebhookEndpointResponseSchema = z.object({ webhookUrl: z.string(), webhookSecret: z.string() });
+const RegisterWebhookEndpointResponseSchema = z.object({
+  webhookUrl: z.string(),
+  webhookSecret: z.string(),
+});
 export type RegisterWebhookEndpointResponse = z.infer<typeof RegisterWebhookEndpointResponseSchema>;
 
 /** Register or rotate (same call — CLAUDE.md §12, Phase 12a's documented deviation: register == rotate, one endpoint). */
-export async function registerWebhookEndpoint(apiKey: string, url: string): Promise<RegisterWebhookEndpointResponse> {
-  return merchantFetch("/webhook-endpoints", { method: "POST", apiKey, body: { url } }, RegisterWebhookEndpointResponseSchema);
+export async function registerWebhookEndpoint(
+  apiKey: string,
+  url: string,
+): Promise<RegisterWebhookEndpointResponse> {
+  return merchantFetch(
+    "/webhook-endpoints",
+    { method: "POST", apiKey, body: { url } },
+    RegisterWebhookEndpointResponseSchema,
+  );
 }
 
 const WebhookDeliverySchema = z.object({
@@ -323,7 +522,10 @@ const WebhookDeliverySchema = z.object({
 });
 export type MerchantWebhookDelivery = z.infer<typeof WebhookDeliverySchema>;
 
-export async function listWebhookDeliveries(apiKey: string, options: { status?: string[] } = {}): Promise<MerchantWebhookDelivery[]> {
+export async function listWebhookDeliveries(
+  apiKey: string,
+  options: { status?: string[] } = {},
+): Promise<MerchantWebhookDelivery[]> {
   const { data } = await merchantFetch(
     "/webhook-deliveries",
     { apiKey, query: { status: options.status?.join(",") } },
