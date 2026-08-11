@@ -8,6 +8,7 @@
  */
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import rateLimit from "@fastify/rate-limit";
+import cors from "@fastify/cors";
 import { ZodError } from "zod";
 import { ApiError } from "./errors.js";
 import type { MandateReader } from "./chain/mandate-reader.js";
@@ -45,6 +46,16 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.decorate("mandateReader", options.mandateReader);
   app.decorate("hashSecret", options.hashSecret);
   app.decorate("now", options.now ?? (() => new Date()));
+
+  // Permissive by design, not an oversight: the only routes a browser ever
+  // calls cross-origin are the *unauthenticated* checkout-session endpoints
+  // (Phase 10's consumer checkout page, hosted on a different origin than
+  // this API) — CORS gates browser JS access, not the API's actual
+  // security boundary (the bearer-token `Authorization` check every other
+  // route requires), so reflecting any origin here doesn't weaken auth.
+  // Merchant checkout pages are expected to live on arbitrary merchant-
+  // controlled domains, so an allowlist would defeat the point.
+  app.register(cors, { origin: true });
 
   // Generous global default; specific routes (merchant creation, API key
   // rotation, charge creation — CLAUDE.md §10) override with a stricter

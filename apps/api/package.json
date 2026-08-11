@@ -12,6 +12,7 @@
     "db:generate": "prisma generate --schema ../../prisma/schema.prisma"
   },
   "dependencies": {
+    "@fastify/cors": "^11.3.0",
     "@fastify/rate-limit": "^10.2.2",
     "@paymap/config": "workspace:*",
     "@paymap/contract-client": "workspace:*",

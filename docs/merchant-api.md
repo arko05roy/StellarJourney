@@ -242,6 +242,48 @@ Requires `Idempotency-Key`.
 
 → `200`, or `404 CHECKOUT_SESSION_NOT_FOUND`.
 
+### `GET /v1/checkout-sessions/:id/public` (Phase 10, unauthenticated)
+
+No `Authorization` header — the consumer checkout page's browser (`apps/web`) opens this directly
+and never holds a merchant API key. Returns only display-safe fields (merchant name/wallet
+address, the product's mandate terms, session status/expiry/`mandateId`) — never a webhook URL,
+webhook secret, or API key. `status` reflects the session's own expiry live (`expired` once past
+`expiresAt`, even before a background sweep updates the stored row).
+
+→ `200`
+
+```json
+{
+  "id": "…",
+  "status": "pending",
+  "expiresAt": "2026-…Z",
+  "mandateId": "…",
+  "payerAddress": "…",
+  "merchant": { "name": "Acme Coffee Roasters", "walletAddress": "G…" },
+  "product": { "name": "…", "assetAddress": "C…", "assetDecimals": 7, "amountType": "fixed", "fixedAmount": "15.00", "maxPerPeriod": "15.00", "periodSeconds": 2592000, "minIntervalSeconds": 0, "maxSuccessfulCharges": 0, "defaultDurationSeconds": 31536000 }
+}
+```
+
+→ `404 CHECKOUT_SESSION_NOT_FOUND`
+
+### `POST /v1/checkout-sessions/:id/mandate` (Phase 10, unauthenticated)
+
+The checkout page calls this once it has submitted `create_mandate` on-chain, to associate the
+resulting `mandate_id` with the session. Also unauthenticated — grants no authority of its own:
+the mandate is independently re-verified on-chain (existence, and that its merchant/asset/payer
+match this session's product and the supplied `payerAddress`) before anything is persisted.
+Idempotent when replayed with the same `mandateId`.
+
+```json
+{ "mandateId": "<64 hex chars>", "payerAddress": "GABC…" }
+```
+
+→ `200` (the same shape as the `/public` read above, now with `status: "completed"`)
+
+→ `400 MandateNotFound` / `400 MANDATE_MERCHANT_MISMATCH` / `400 MANDATE_ASSET_MISMATCH` /
+`400 MANDATE_PAYER_MISMATCH` / `409 CHECKOUT_SESSION_ALREADY_LINKED` /
+`409 CHECKOUT_SESSION_NOT_PENDING`
+
 ### `GET /v1/mandates/:id`
 
 Reads live on-chain state via `@paymap/contract-client` — never the database. `:id` is the

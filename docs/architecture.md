@@ -246,3 +246,77 @@ Real result (see `tasks/todo.md`'s Phase 9 review for the full transcript):
 - relayer-submitted `charge` tx `86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c`
   (ledger `3835099`), driven end-to-end through `processChargeRequest`, resulting in exactly one
   `Payment` row and a `succeeded` `ChargeRequest`.
+
+## Phase 10 — Consumer checkout (`apps/web`)
+
+### A public read/write seam on `apps/api`, not a new service
+
+The checkout page's browser never holds a merchant API key (only `apps/api`'s existing
+`Authorization: Bearer` bearer-token routes require one), so Phase 10 added two **unauthenticated**
+routes to `apps/api/src/routes/checkout-sessions.ts` rather than inventing a second backend:
+
+- `GET /v1/checkout-sessions/:id/public` — merchant name/wallet address, the product's mandate
+  terms, and the session's own status/expiry. Only display-safe fields; no webhook URL, webhook
+  secret, or API keys.
+- `POST /v1/checkout-sessions/:id/mandate` — the checkout page reports the `mandate_id` it just
+  created on-chain. Grants no authority of its own: the handler independently re-reads the mandate
+  from chain (`app.mandateReader.getMandate`) and rejects a mismatched merchant/asset/payer before
+  persisting anything (CLAUDE.md §2 — the contract remains the policy authority; this row is a
+  merchant-dashboard convenience, never proof of anything).
+
+Both routes needed `@fastify/cors` (`app.ts`, `origin: true`) — a merchant's checkout page is
+expected to be embedded on an arbitrary merchant-controlled domain, different from `apps/api`'s
+own origin, so the browser's fetch is blocked by the same-origin policy without it. CORS gates
+browser JS access only, not this API's actual security boundary (the bearer-token check every
+other route still requires), so this doesn't weaken auth anywhere.
+
+### Package layering (bottom to top, extending the Phase 7 diagram)
+
+```text
+packages/contract-client/{client,domain}.js   browser-safe subpaths (no node:fs)
+packages/contract-client (root)               adds deployment-registry.js (Node-only, loadDeployment)
+        │
+packages/stellar                              + src/token.ts: SEP-41 approve/allowance builders
+        │                                       (the mandate-registry generated client only knows
+        │                                        that one ABI; a SAC has no published Wasm to derive
+        │                                        a spec from, so this drives AssembledTransaction.build
+        │                                        directly with hand-built ScVal args)
+        ▼
+apps/web/src/lib/{wallet,chain-gateway}.ts    the two seams the UI depends on, swappable for tests
+        ▼
+apps/web/src/components/checkout/*            state machine (lib/checkout-state.ts) + presentation
+```
+
+`packages/contract-client`'s root barrel (`export * from "./deployment-registry.js"`) reads
+`deployments/<network>.json` via `node:fs` at import time — fine for every Node consumer, but
+importing *any* value binding from the root barrel inside a Next.js Client Component drags that
+Node-only module into the browser bundle too (a bundler can't tell which named export a mixed
+value+type import statement actually needs). `package.json` gained `./client`/`./domain` subpath
+exports so `apps/web/src/lib/chain-gateway.ts` (a client-bundled file) can import
+`createMandateRegistryClient`/`buildCreateMandate`/`idToHex` without ever pulling in `node:fs`.
+`loadDeployment` itself is still only ever called from `app/checkout/[sessionId]/page.tsx` (a
+Server Component) and passed down as a plain prop — deployment info is public, so this is a
+bundling concern only, not a secrecy one.
+
+### Two-step signing, one component tree
+
+`components/checkout/checkout-flow.tsx` drives `lib/checkout-state.ts`'s reducer through:
+connect wallet -> `create_mandate` (payer-signs-and-submits, `submitAsInvoker` — same flow as
+Phase 7's demo script) -> bounded `approve` on the product's asset contract (`packages/stellar`'s
+new `buildApprove`, amount = `computeMaxExposure` + a disclosed 1% headroom, `computeBoundedAllowance`
+in `lib/mandate-terms.ts`) -> `POST .../mandate` to link the session. The reducer's one
+load-bearing transition: `CREATE_MANDATE_SUCCESS` sets `mandateId` and it is *never cleared* by a
+later `APPROVE_ERROR` — a step-1-succeeds/step-2-fails run renders a "created but not funded yet"
+notice with a retry-approve action reading `mandateId` straight off state, never a dead end.
+
+### Testability: `WalletAdapter` and `ChainGateway` as injected seams
+
+Both `lib/wallet.ts` (Stellar Wallets Kit, Freighter + xBull modules) and `lib/chain-gateway.ts`
+(the real Soroban calls) are constructed by `components/checkout/checkout-page-client.tsx` and
+passed into `CheckoutFlow` as props — never imported directly by the flow/reducer. This is what
+lets `e2e/checkout.spec.ts` exercise the real state machine and every rendered term without a
+browser wallet extension or live RPC: `NEXT_PUBLIC_E2E_STUBS=1` (set only by
+`playwright.config.ts`'s own dev-server invocation) swaps in `lib/test-stubs.ts`'s deterministic
+fakes instead. The merchant API itself is stood in for by `e2e/fixtures/mock-api-server.mjs` (plain
+`node:http`, no framework) — necessary because the checkout session fetch happens in a Server
+Component, which Playwright's browser-level `page.route()` interception cannot see at all.

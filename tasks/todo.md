@@ -199,15 +199,15 @@ the full rationale.
 
 ## Phase 10 — Consumer Checkout
 
-- [ ] Next.js App Router, Tailwind, shadcn/ui
-- [ ] Stellar Wallets Kit connect
-- [ ] Checkout page: merchant identity, product, **all terms visible, none collapsed** (CLAUDE.md §13)
-- [ ] Max-exposure calculator: `min(max_per_charge × max_charges, max_per_period × periods_until_expiry)` — show number
-- [ ] Two-step sign: `create_mandate` → bounded `approve` (remaining theoretical max + explicit fee headroom). Never unlimited.
-- [ ] Allowance-change flow: zero → confirm → set new
-- [ ] Confirmation screen: mandate id, next eligible charge date
+- [x] Next.js App Router, Tailwind, shadcn/ui
+- [x] Stellar Wallets Kit connect
+- [x] Checkout page: merchant identity, product, **all terms visible, none collapsed** (CLAUDE.md §13)
+- [x] Max-exposure calculator: `min(max_per_charge × max_charges, max_per_period × periods_until_expiry)` — show number
+- [x] Two-step sign: `create_mandate` → bounded `approve` (remaining theoretical max + explicit fee headroom). Never unlimited.
+- [x] Allowance-change flow: zero → confirm → set new
+- [x] Confirmation screen: mandate id, next eligible charge date
 
-**Gate:** `pnpm test` + Playwright happy path.
+**Gate:** `pnpm test` + Playwright happy path — both ran, all green (see Review below).
 
 ---
 
@@ -1278,3 +1278,144 @@ for stuck-`submitted` rows exists yet, flagged as a real gap for a future phase.
 remains Phase 12 (this phase only enqueues `pending` rows, per CLAUDE.md's own step 10 scoping).
 Refund submission (mirroring `charge`) still does not exist — `RefundRequest` rows still never
 progress past `scheduled`, unchanged from the Phase 8 review's own note.
+
+### Phase 10 — Consumer Checkout (done)
+
+**What changed:** built `apps/web`'s consumer checkout page (`/checkout/[sessionId]`) end to end.
+Invoked the `shadcn` skill (installed via `npx shadcn@latest init`/`add`, `base-nova` preset,
+neutral base color, `lucide` icons — Button/Card/Badge/Separator/Alert/Dialog/Skeleton/Input/Label)
+and `design-taste-frontend` (noted it is scoped to landing pages/portfolios and explicitly excludes
+"multi-step product UI" — this checkout flow is exactly that, so only the universal parts applied:
+no crypto-glow/gradients, one accent color, dark mode via `prefers-color-scheme`, WCAG AA, real
+icon library instead of hand-rolled SVGs).
+
+**New files, `apps/web/src`:** `lib/mandate-terms.ts` (pure — `deriveMandateTerms`,
+`computeMaxExposure`, `computeBoundedAllowance`), `lib/checkout-state.ts` (the flow's reducer,
+independently tested), `lib/{api,env,errors,format,ids,wallet,chain-gateway,test-stubs}.ts`,
+`components/checkout/*` (`terms-list`, `max-exposure-callout`, `wallet-connect-button`,
+`error-banner`, `confirmation-card`, `checkout-flow`, `checkout-page-client`),
+`app/checkout/[sessionId]/{page,loading,not-found,error}.tsx`.
+
+**Max-exposure formula (as implemented, `lib/mandate-terms.ts::computeMaxExposure`):**
+`maxSuccessfulCharges === 0` (unlimited count, contract's own convention) → period bound only
+(`maxPerPeriod × ceil((expiresAt - startAt) / periodSeconds)`); otherwise
+`min(perCharge × maxSuccessfulCharges, maxPerPeriod × periodsUntilExpiry)`. All-`bigint`, no
+`Number` anywhere in the calculation (proven directly by a `10n**30n`-amount test case).
+
+**Bounded allowance:** `computeBoundedAllowance(maxExposure)` = `maxExposure` + a disclosed 1%
+(`ALLOWANCE_FEE_HEADROOM_BPS = 100n`, rounded up) headroom, shown to the payer as its own line
+before signing. **Flagged, not fully resolved:** the brief's "small explicit fee headroom" wording
+is ambiguous about *why* a same-asset buffer is needed on top of an already-exact theoretical
+maximum (network fees are paid in XLM, not the approved asset) — implemented as a conservative,
+transparent, non-zero constant per the literal instruction, but the product rationale needs lead
+confirmation; 1% was my own judgment call, not derived from a spec number.
+
+**Two-step signing + failure modes:** `create_mandate` (payer-signs-and-submits, `submitAsInvoker`)
+then a bounded `approve` on the product's asset contract (new `packages/stellar/src/token.ts` —
+the mandate-registry generated client only knows that one ABI; a SAC has no published Wasm to
+derive a spec from, so this drives `AssembledTransaction.build` directly). Failure modes, all
+handled explicitly (`lib/checkout-state.ts`'s reducer + `checkout-flow.tsx`):
+- Wallet rejection / insufficient balance / network error → classified by `lib/errors.ts::toDisplayError`
+  into specific consumer-language messages (never generic), contract errors go through
+  `@paymap/stellar`'s frozen table so the code is never lost.
+- **Step 1 succeeds, step 2 fails** — the explicit scenario called out in the brief.
+  `CREATE_MANDATE_SUCCESS` sets `mandateId` on state and no later `APPROVE_ERROR` clears it; the UI
+  renders "created but not funded yet" with a **Complete the approval** button that retries `runApprove`
+  directly, reading `mandateId`/`address` off state — never a dead end. Proven by
+  `checkout-state.test.ts`'s dedicated test.
+- **Link-to-session failure after a successful approve** (mandate exists and is funded on-chain,
+  only the merchant-dashboard association failed) — deliberately a non-blocking warning on the
+  confirmation screen (`state.linkWarning`, with its own retry), not a hard "error" phase, since
+  nothing fund-related actually failed (CLAUDE.md §2).
+
+**Allowance-change flow (zero → confirm → set new, PLAN.md §10.10):** implemented in
+`checkout-flow.tsx::runApprove` — the mandate contract is one shared spender across every mandate
+a payer has ever created, so a returning payer may already have a non-zero allowance from an
+earlier mandate; setting a new absolute amount directly on top of an unknown existing value is
+exactly the ambiguity this sequence exists to avoid. Queries current allowance first
+(`ChainGateway.queryAllowance`, new); if non-zero, submits `approve(amount=0)`, re-queries to
+confirm it landed as `0`, only then submits the real bounded amount — skipped entirely (no extra
+signature requested) when there is nothing to reset, the common first-mandate case. Proven by
+`checkout-flow.test.tsx`'s two tests (asserts the exact `approve` call sequence/amounts in both
+branches).
+
+**Stop-condition check — none triggered:** Stellar Wallets Kit (`@creit.tech/stellar-wallets-kit`
+v2.5.0, static-class API — verified against the installed package's actual `.d.ts`, not assumed
+from training data) produces `signTransaction`/`signAuthEntry` callbacks that match
+`@stellar/stellar-sdk/contract`'s `SignTransaction`/`SignAuthEntry` shapes exactly, no adapter
+needed. No unlimited allowance was ever required. Every required term fit on one screen with
+nothing collapsed (proven by `terms-list.test.tsx`'s explicit "no `<details>`/`aria-expanded`/
+`hidden` anywhere" assertion).
+
+**Backend additions this phase required (apps/api), not originally in Phase 10's file list:**
+1. Two new **unauthenticated** routes on `checkout-sessions.ts` — `GET .../public` and
+   `POST .../mandate` — because the consumer browser never holds a merchant API key and no public
+   read/write path existed for it. `POST .../mandate` independently re-verifies the mandate
+   on-chain (existence + merchant/asset/payer match) before persisting anything, so it grants no
+   authority of its own. 15 new tests in `checkout-sessions.test.ts`. Documented in
+   `docs/merchant-api.md` and `docs/threat-model.md`'s new "Phase 10 additions" section.
+2. `@fastify/cors` (`origin: true`, global) — without it every browser fetch from `apps/web`'s
+   origin to `apps/api`'s origin is blocked by the same-origin policy before it ever reaches the
+   new routes. Documented inline in `app.ts` and in `docs/threat-model.md` as a deliberate choice
+   (CORS gates browser JS access, not this API's actual bearer-token auth boundary).
+3. `packages/contract-client` gained `./client`/`./domain` subpath exports so a browser-bundled
+   file (`apps/web`'s `chain-gateway.ts`) can import the client facade without also pulling in the
+   root barrel's Node-only `deployment-registry.js` (`node:fs`) — a real `next build` failure the
+   first time this was tried, not a hypothetical. `loadDeployment` itself still only runs
+   server-side (`app/checkout/[sessionId]/page.tsx`, a Server Component), passed down as a prop.
+
+**Toolchain deviation, discovered mid-phase, not chosen upfront:** `npx shadcn@latest init`'s
+current default (`base-nova` preset) generates Tailwind v4-only component syntax
+(`--spacing()` theme functions, `@theme inline`) regardless of the pre-existing Tailwind v3 setup
+it detected — the first `next build` failed with "unknown utility class `border-border`" and
+`node:fs`-in-browser-bundle errors. Migrated `apps/web` from Tailwind v3 to v4
+(`@tailwindcss/postcss`, `@import "tailwindcss"` + `@custom-variant dark` in `globals.css`,
+`tailwind.config.ts` reduced to a vestigial file `components.json` still points at) rather than
+fight the CLI's output — the more correct fix given what the CLI actually generates.
+
+**Test count:** 38 `apps/web` unit/component tests (Vitest + Testing Library — max-exposure/
+allowance/format/error-mapping/term-derivation/reducer/terms-list/checkout-flow) + 3 Playwright
+tests (happy path; not-found; keyboard-only accessibility with focus-visible assertions). Playwright
+stubs both the wallet (`NEXT_PUBLIC_E2E_STUBS=1` swaps in `lib/test-stubs.ts`) and the merchant API
+(`e2e/fixtures/mock-api-server.mjs`, plain `node:http` — necessary because the checkout session
+fetch happens in a Server Component, which Playwright's browser-level `page.route()` cannot see).
+Documented how to run it: `pnpm --filter @paymap/web test:e2e` (`playwright.config.ts` starts both
+webServers itself; browsers via `pnpm exec playwright install --with-deps chromium`, already run).
+
+**Commands run (all passed):**
+```
+docker compose up -d
+pnpm install
+pnpm lint                            (16/16 tasks)
+pnpm typecheck                       (16/16 tasks)
+pnpm build                           (10/10 tasks — apps/web: next build succeeds)
+pnpm test                            (16/16 tasks; apps/api: 152 tests incl. 15 new;
+                                       apps/web: 38 new tests; apps/relayer: 56, unchanged)
+pnpm test:e2e                        (apps/web: 3/3 Playwright tests)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-token,
+                                       unchanged — no contract touched this phase)
+```
+
+**Deviations flagged:**
+- The 1% fee-headroom basis-point figure is my own judgment call, not a spec-given number (see
+  above) — needs lead confirmation.
+- `productAssetSymbol` (`checkout-flow.tsx`) renders a short truncated-address placeholder
+  ("Asset C1234…5678") instead of a real asset code/symbol — the public product API doesn't carry
+  one yet. The full address is always shown alongside in `TermsList` (never hidden), but a real
+  asset registry/symbol is deferred, likely Phase 12.
+- `packages/ui` (the shared shadcn-component package the repo's own doc comments say should start
+  being populated "starting Phase 10") was **not** used — shadcn components were installed directly
+  into `apps/web/src/components/ui` instead. `packages/ui` is currently a compiled (`tsc` → `dist`)
+  package with no React/JSX/Tailwind wiring, and only one app (`apps/web`) consumes UI so far;
+  properly wiring a shared, uncompiled, source-consumed UI package (the idiomatic shadcn monorepo
+  pattern) is a real architectural decision better made once Phase 12's merchant dashboard exists
+  too and the actual sharing need is concrete, not speculative. Flagged, not silently skipped.
+
+**Unverified / left for later phases:** no real testnet run of the checkout flow (wallet signing
+against a live Freighter extension, real Soroban RPC) — explicitly out of this phase's scope per
+the brief ("a real testnet run is not required here — Phase 13 owns the full e2e"). The allowance-
+change zero-confirm-set-new sequence is proven by a mocked-gateway component test, not against a
+real SAC on testnet. `GET /v1/checkout-sessions/:id/public`'s lack of a route-specific rate limit
+(beyond the app's global 1000/min/IP default) is flagged in `docs/threat-model.md` for Phase 14.

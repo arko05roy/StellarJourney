@@ -5,7 +5,7 @@ import { createAuthPreHandler, requireMerchantContext } from "../auth/plugin.js"
 import { CreateProductSchema } from "../schemas/products.js";
 import type { Product } from "../db.js";
 
-function toProductResponse(product: Product) {
+export function toProductResponse(product: Product) {
   const decimals = product.assetDecimals;
   return {
     id: product.id,

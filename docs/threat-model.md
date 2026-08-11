@@ -113,3 +113,38 @@ demo merchant keypair Phase 7 already used — acceptable for a demo proof, expl
 production design. The most likely real mechanism (not yet built): the merchant's own backend
 pre-signs the specific Soroban authorization entry at charge-request time and the API persists the
 signed XDR for the relayer to attach — never a raw key reaching this process.
+
+## Phase 10 additions — consumer checkout (two new unauthenticated routes)
+
+Phase 10 needed `apps/api` to answer the browser directly (no merchant API key), which is a new
+kind of attack surface for this API: everything before Phase 10 assumed a caller either had a
+bearer token or was the unauthenticated-by-necessity merchant bootstrap. Recorded here now, full
+adversarial coverage in Phase 14.
+
+- **`GET /v1/checkout-sessions/:id/public` as an enumeration/information-disclosure vector.**
+  Unlike `GET /v1/mandates/:id` (deliberately returns the same 404 for "doesn't exist" vs. "exists,
+  wrong owner"), this route has no owner check at all by design — anyone with a session id can
+  read it, matching a checkout link's own trust model (a session id is the bearer credential; it's
+  handed to the exact person meant to complete the checkout, same as any payment-link URL). The
+  response is scoped to display-safe fields only (no webhook URL/secret/API keys) specifically so
+  this openness can't leak anything the merchant wouldn't already be showing the payer anyway.
+  Session ids (`cuid`-style Prisma default) are not sequential/guessable, so this isn't a practical
+  enumeration vector, but no explicit rate limit is scoped to this route beyond the app's global
+  IP-keyed default (1000/min) — Phase 14 should consider a tighter one.
+- **`POST /v1/checkout-sessions/:id/mandate` accepting an attacker-supplied `mandateId`.**
+  Mitigated the same way `checkout-sessions.ts`'s handler documents inline: the mandate is
+  independently re-read from chain and its `merchant`/`asset`/`payer` are checked against the
+  session's own product/merchant and the caller's claimed `payerAddress` before anything is
+  persisted. Worst case for a forged call: a session gets associated with a real, unrelated
+  on-chain mandate that happens to match all three checks (which requires the attacker to already
+  know a real mandate's payer address and have it match a merchant/asset the attacker also
+  controls a session for) — never a fabricated mandate, never a fund movement. `session.mandateId`
+  is one-way-settable (`CHECKOUT_SESSION_ALREADY_LINKED` on any attempt to overwrite with a
+  *different* mandate id), so this can't be used to repeatedly re-point a session either.
+- **Permissive CORS (`origin: true`) applied globally, not scoped to just these two routes.**
+  Deliberate, not an oversight (see `docs/architecture.md`'s Phase 10 section) — every other route
+  still requires the bearer token regardless of origin, so CORS here only affects which websites'
+  JavaScript *can attempt* a request, not whether that request is authorized. Phase 14 should still
+  double check no authenticated route relies on cookie-based session state that CORS + credentials
+  could expose (currently none do — auth is a bearer header the browser never sends automatically
+  cross-origin).

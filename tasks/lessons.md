@@ -379,3 +379,109 @@
   tasks already guarantees once the consuming package lists it as a real
   `dependencies` entry (pnpm workspace protocol) — no `turbo.json` change
   needed.
+- `npx shadcn@latest init` (v4.16.0, `base-nova` preset) generates
+  Tailwind-v4-only component syntax (`--spacing()` theme functions inside
+  `[...]` arbitrary values, `@theme inline` CSS blocks) **regardless of
+  which Tailwind major version it detects in the target project** —
+  `components.json`'s recorded `tailwindVersion` was `"v3"` (the project's
+  actual installed version at init time) and the CLI still emitted v4-only
+  component source. First real symptom: `next build` fails with "Cannot
+  apply unknown utility class `border-border`" (the plain CSS custom
+  properties the CLI writes to `:root`/`.dark` are never registered as
+  Tailwind color tokens under v3 — that registration is a v4 `@theme
+  inline` block the CLI simply doesn't emit for a v3-detected project).
+  Fix was to actually migrate the project to Tailwind v4
+  (`@tailwindcss/postcss`, `@import "tailwindcss"` replacing the three
+  `@tailwind` directives, `@custom-variant dark (&:where(.dark, .dark *));`
+  for class-based dark mode since v4 defaults to `prefers-color-scheme`)
+  rather than trying to hand-patch v3-style token mappings to match
+  components written in v4 syntax — after the v4 migration, **re-running**
+  `shadcn init -y -d --force` regenerated a correct `@theme inline` mapping
+  block automatically (it now detects v4 correctly and knows the token
+  names each installed component actually needs), which was far more
+  reliable than hand-authoring every `--radius-md`/`--color-*` variable
+  name myself by reading each component's source. Lesson: after any
+  `shadcn init`, immediately run `npx shadcn@latest info --json -c <app>`
+  and check `project.tailwindVersion` actually matches what's installed
+  before writing any component that depends on the generated theme tokens.
+- A Next.js Client Component that imports **any** value binding from a
+  workspace package's barrel `index.ts` pulls in that barrel's *entire*
+  transitive module graph into the browser bundle — including a sibling
+  module the import statement never actually touches, if that sibling is
+  re-exported via `export * from "./other.js"` in the same barrel. Concrete
+  case: `packages/contract-client/src/index.ts` re-exports both
+  `./client.js` (pure) and `./deployment-registry.js` (`node:fs`/`node:path`/
+  `node:url` at module-load time, for `loadDeployment`); a Client Component
+  importing only `createMandateRegistryClient` from the bare package
+  specifier still fails `next build` with `UnhandledSchemeError: Reading
+  from "node:fs" is not handled by plugins` (webpack has no browser
+  polyfill for the Node builtin scheme). A **type-only** import from the
+  same barrel (`import type { DeploymentRecord } from "@paymap/contract-client"`)
+  is safe and adds nothing to the bundle (erased entirely at compile time,
+  confirmed by reading the compiled output) — the failure mode is
+  specifically a *value* import through a barrel that also re-exports a
+  Node-only module. Fix: add narrow subpath `exports` entries
+  (`"./client"`, `"./domain"`) to the package's `package.json` pointing
+  directly at the specific built files, and have the browser-bundled
+  caller import value bindings from those subpaths instead of the root
+  barrel — the root `"."` export stays untouched for every existing Node
+  consumer (apps/api, apps/relayer, scripts).
+- A Next.js App Router route with a `loading.tsx` boundary streams its
+  response: the initial HTTP response (status 200, headers already sent)
+  commits *before* the async Server Component's work resolves. Calling
+  `notFound()` (from `next/navigation`) deep inside that async work still
+  renders the correct not-found UI content inside the stream, but **the
+  already-committed HTTP status code stays 200** — verified directly via
+  `curl` (`200` status, but the response body genuinely contains the
+  not-found page's text). A Playwright assertion on `response.status()`
+  for such a route will fail even though the user-visible behavior is
+  entirely correct; assert on the rendered content instead
+  (`getByRole("heading", ...)`), not the raw navigation response status,
+  for any route with a `loading.tsx` sibling that can also call
+  `notFound()`.
+- `@creit.tech/stellar-wallets-kit` v2.5.0's public API is an all-static
+  class (`StellarWalletsKit.init(...)`, `.authModal()`, `.signTransaction()`,
+  `.signAuthEntry()`, `.disconnect()` — no `new StellarWalletsKit(...)`
+  instance constructor) — verified against the installed package's actual
+  `esm/sdk/kit.d.ts`, not assumed from older training-data examples of the
+  library that used an instance API. Wallet modules (`FreighterModule`,
+  `xBullModule`, etc.) are exported from per-wallet subpaths
+  (`@creit.tech/stellar-wallets-kit/modules/freighter`), not from the
+  package root — the root only re-exports `./sdk/mod.js` (the `kit`/
+  `types` surface), `./components/mod.js`, and `./state/mod.js`.
+  `StellarWalletsKit.signTransaction`/`.signAuthEntry`'s signatures match
+  `@stellar/stellar-sdk/contract`'s `SignTransaction`/`SignAuthEntry` types
+  exactly, so no adapter shim is needed to pass them straight into a
+  generated contract client's `signTransaction`/`signAuthEntry` options.
+- A SEP-41 token contract (a Stellar Asset Contract) has no published Wasm
+  to derive a `ContractSpec` from (`stellar contract bindings typescript`
+  has nothing to point at), so building an `approve`/`allowance` call from
+  a browser/TS context can't reuse the generated-client pattern the way
+  `mandate-registry` does. `@stellar/stellar-sdk/contract`'s
+  `AssembledTransaction.build<T>({ method, args, contractId, ... })` is the
+  right low-level primitive instead — build `args` as raw `ScVal`s via
+  `nativeToScVal(value, { type: "address" | "i128" | "u32" })` from the
+  base `@stellar/stellar-sdk` package (not `/contract`), matching SEP-41's
+  known fixed signature by hand rather than needing a spec at all.
+  `@stellar/stellar-sdk/contract` does **not** re-export `rpc` (that's
+  `@stellar/stellar-sdk/rpc`'s `Server` export, aliased from
+  `RpcServer` — confirmed by grepping `contract/index.d.ts`, which has no
+  `rpc` line at all) — needed a separate import for `getLatestLedger()`
+  when computing a bounded (never-unbounded) `live_until_ledger` for the
+  approval.
+- A merchant checkout page hosted on an arbitrary merchant-controlled
+  domain, fetching an API on a different origin, needs that API to send
+  CORS headers — obvious in hindsight, but easy to miss when every prior
+  phase's API surface was server-to-server (relayer, scripts) or same-
+  origin-irrelevant (bearer-token auth, `app.inject()` tests never go
+  through a real browser fetch). Symptom when missing: the browser's
+  `fetch()` fails with an opaque, generically-worded error (no CORS-
+  specific message reaches JS) that a naive `/network|fetch|timeout/i`
+  error-classifier will happily (and misleadingly) label "NETWORK_ERROR" —
+  looks exactly like a real connectivity problem, not a CORS block, unless
+  you specifically check the browser devtools/Playwright trace for a CORS
+  console error. Caught by a real Playwright run against two different
+  localhost ports (Next dev server + a mock API server), not by any unit
+  test — `app.inject()`-based backend tests never exercise the browser's
+  same-origin policy at all, so this class of bug is invisible to them by
+  construction.
