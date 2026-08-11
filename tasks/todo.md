@@ -2071,8 +2071,9 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] Add staging infrastructure/config for managed Postgres and Redis, persistent monitoring,
       TLS frontend/API, private relayer/metrics networking, secret injection, migration-before-
       rollout, backup/restore, rollback, and separate testnet relayer account.
-- [ ] Deploy frontend/API/relayer to the selected staging provider, run migrations, verify health,
-      run the full system E2E against staging URLs, and record image/version/deployment evidence.
+- [x] Deploy the demo frontend to Vercel and combined API/relayer to Render Free; provision
+      Postgres/Key Value, fund a dedicated testnet relayer, run migrations, and verify health.
+- [ ] Run the full system E2E against deployed URLs and record final load/failure evidence.
 
 #### 6. Load and failure testing
 
@@ -2103,7 +2104,8 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] Docker images build and run as non-root; health/readiness checks pass
 - [x] Prometheus config/rules and Alertmanager config validate
 - [ ] Nightly workflow validates and manual dispatch passes
-- [ ] Staging smoke, system E2E, load, soak, failure, backup/restore, and rollback checks pass
+- [x] Deployed frontend/API smoke checks pass
+- [ ] Deployed system E2E, load, soak, failure, backup/restore, and rollback checks pass
 - [x] Inspect `git diff` and confirm no unrelated changes or tracked secrets
 
 ### Files likely touched
@@ -2121,8 +2123,8 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 - [x] Architecture checkpoint: approve signed Soroban authorization-entry XDR transport,
       Prometheus/Alertmanager, and the scope set above.
-- [ ] Render selected; custom domain not required and alert email deferred. Sign in to Render and
-      provide the dedicated funded testnet relayer key before external deployment.
+- [x] Render selected; custom domain not required and alert email deferred. Dedicated testnet
+      relayer created and funded during deployment.
 
 ### Review
 
@@ -2142,11 +2144,18 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
   recovered to 200. Local 2,000-request load probe: 0 failures, p95 2.91 ms.
 - Prometheus config and 13 rules, synthetic firing/resolution, Alertmanager, and Actions workflow
   syntax validated.
+- Vercel frontend is live at `https://paymap-web.vercel.app`; Render API/relayer is live at
+  `https://paymap-demo-api.onrender.com`. `/healthz`, `/readyz`, `/metrics`, `/merchant`, and
+  `/dashboard` returned 200.
+- Render sequential load probe: 100 requests, 0 failures, p95 133.02 ms.
 
 #### Risks
 
-- Render deployment, staging E2E/load/soak, backup/restore, and rollback remain blocked on Render
-  login and a dedicated funded testnet relayer secret.
+- Render Free fails the 5-concurrency load budget: 500 requests, 16.4% platform-edge `404` responses
+  with `x-render-routing: no-server`, p95 130.32 ms for completed requests. Application logs show
+  handled requests completing with 200 and no process crash. Deployed E2E/soak remains incomplete.
+- Free Render Postgres expires after 30 days and has no backups; free Key Value is nonpersistent;
+  the web service sleeps after inactivity. This deployment is demo-only.
 - Submitted transactions with an unknown final ledger outcome alert for manual reconciliation;
   automatic submitted-state reconciliation remains follow-up work.
 
