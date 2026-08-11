@@ -1,0 +1,13 @@
+// Phase 0: datasource + generator only. Models (User, Merchant, Product,
+// CheckoutSession, MandateIndex, ChargeRequest, Payment, WebhookDelivery,
+// IdempotencyKey — PLAN.md §13) are added in Phase 8. The database is never
+// the final source of truth for mandate/charge state — see CLAUDE.md §1.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}

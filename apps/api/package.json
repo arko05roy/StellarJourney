@@ -1,0 +1,19 @@
+{
+  "name": "@paymap/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"no tests yet\" && exit 0"
+  },
+  "dependencies": {
+    "@paymap/config": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5"
+  }
+}
