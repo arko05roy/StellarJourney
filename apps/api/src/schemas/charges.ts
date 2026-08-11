@@ -8,3 +8,7 @@ export const CreateChargeSchema = z.object({
   scheduledFor: Iso8601Schema.optional(),
 });
 export type CreateChargeInput = z.infer<typeof CreateChargeSchema>;
+
+export const CompleteChargeAuthorizationSchema = z.object({
+  signedAuthorizationEntryXdr: z.string().min(1).max(65_536),
+});

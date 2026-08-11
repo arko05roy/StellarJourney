@@ -22,6 +22,7 @@ import { PrismaClient } from "../../../prisma/generated/client/index.js";
 export { PrismaClient, Prisma } from "../../../prisma/generated/client/index.js";
 export type {
   ApiKey,
+  ChargeAuthorization,
   ChargeRequest,
   CheckoutSession,
   IdempotencyKey,
@@ -36,6 +37,7 @@ export type {
 export {
   AmountType,
   ApiKeyStatus,
+  ChargeAuthorizationStatus,
   ChargeRequestStatus,
   CheckoutSessionStatus,
   MerchantStatus,

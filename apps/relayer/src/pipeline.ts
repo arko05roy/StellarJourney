@@ -43,12 +43,22 @@ import { ApiError } from "@paymap/api/dist/errors.js";
 import { MandateReadError } from "@paymap/contract-client";
 import type { ChargeRequestStatus, PrismaClient } from "./db.js";
 import type { ChainGateway } from "./chain-gateway.js";
-import { classifyContractErrorName, UnclassifiableContractError, type ClassifiedFailure } from "./classify.js";
+import {
+  classifyContractErrorName,
+  UnclassifiableContractError,
+  type ClassifiedFailure,
+} from "./classify.js";
 import { resolveChargeContext, ChargeContextError } from "./context.js";
 import { nextRetryAt } from "./retry-schedule.js";
 import { enqueueChargeWebhook } from "./webhook.js";
+import { decryptChargeAuthorization } from "@paymap/shared";
+import { noopObservability, type Observability } from "./observability.js";
 
-export type Logger = (level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>) => void;
+export type Logger = (
+  level: "info" | "warn" | "error",
+  event: string,
+  fields: Record<string, unknown>,
+) => void;
 const noopLogger: Logger = () => undefined;
 
 export interface PipelineDeps {
@@ -56,6 +66,8 @@ export interface PipelineDeps {
   gateway: ChainGateway;
   now: () => Date;
   logger?: Logger;
+  observability?: Observability;
+  authorizationEncryptionKey?: string;
 }
 
 export type PipelineOutcome =
@@ -74,11 +86,17 @@ function permanentReason(reason: string): ClassifiedFailure {
   return { failureClass: "permanent", reason };
 }
 
-export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: string): Promise<PipelineOutcome> {
+export async function processChargeRequest(
+  deps: PipelineDeps,
+  chargeRequestId: string,
+): Promise<PipelineOutcome> {
   const { prisma, gateway, now } = deps;
   const log = deps.logger ?? noopLogger;
+  const metrics = deps.observability ?? noopObservability;
 
-  const maybeChargeRequest = await prisma.chargeRequest.findUnique({ where: { id: chargeRequestId } });
+  const maybeChargeRequest = await prisma.chargeRequest.findUnique({
+    where: { id: chargeRequestId },
+  });
   if (!maybeChargeRequest) {
     throw new Error(`ChargeRequest "${chargeRequestId}" does not exist.`);
   }
@@ -86,29 +104,55 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
   // `fail` closure below (TS widens a null-checked outer binding back to
   // its full type across a nested function boundary).
   const chargeRequest = maybeChargeRequest;
+  const logContext = {
+    requestId: chargeRequestId,
+    merchantId: chargeRequest.merchantId,
+    mandateId: chargeRequest.mandateId,
+    chargeId: chargeRequest.chargeId,
+  };
+  let submittedTransactionHash = chargeRequest.transactionHash ?? undefined;
 
-  const claimFrom: ChargeRequestStatus = chargeRequest.status === "retryable_failed" ? "retryable_failed" : "scheduled";
+  const claimFrom: ChargeRequestStatus =
+    chargeRequest.status === "retryable_failed" ? "retryable_failed" : "scheduled";
   const attemptCount = chargeRequest.attemptCount + 1;
   try {
-    await transitionChargeRequest(prisma, chargeRequestId, claimFrom, "processing", { attemptCount });
+    await transitionChargeRequest(prisma, chargeRequestId, claimFrom, "processing", {
+      attemptCount,
+    });
   } catch (error) {
     if (error instanceof ApiError && error.code === "InvalidStateTransition") {
-      log("info", "charge_request.claim_lost", { chargeRequestId, attemptedFrom: claimFrom });
+      metrics.recordDuplicateChargePrevented();
+      log("info", "charge_request.claim_lost", {
+        ...logContext,
+        chargeRequestId,
+        attemptedFrom: claimFrom,
+      });
       return { kind: "skipped_not_claimable" };
     }
     throw error;
   }
-  log("info", "charge_request.claimed", { chargeRequestId, mandateId: chargeRequest.mandateId, chargeId: chargeRequest.chargeId, attemptCount });
+  log("info", "charge_request.claimed", { ...logContext, chargeRequestId, attemptCount });
 
   /** Terminal-failure path: classifies, transitions from `from`, and enqueues `payment.failed` — all in one DB transaction. */
-  async function fail(from: ChargeRequestStatus, classified: ClassifiedFailure): Promise<PipelineOutcome> {
-    const retryAt = classified.failureClass === "transient" ? nextRetryAt(attemptCount, now()) : undefined;
+  async function fail(
+    from: ChargeRequestStatus,
+    classified: ClassifiedFailure,
+  ): Promise<PipelineOutcome> {
+    metrics.recordChargeFailure(classified.reason);
+    const retryAt =
+      classified.failureClass === "transient" ? nextRetryAt(attemptCount, now()) : undefined;
     if (retryAt !== undefined) {
+      metrics.recordRetry();
       await transitionChargeRequest(prisma, chargeRequestId, from, "retryable_failed", {
         failureCode: classified.reason,
         nextAttemptAt: retryAt,
       });
-      log("warn", "charge_request.retry_scheduled", { chargeRequestId, reason: classified.reason, nextAttemptAt: retryAt.toISOString() });
+      log("warn", "charge_request.retry_scheduled", {
+        ...logContext,
+        chargeRequestId,
+        reason: classified.reason,
+        nextAttemptAt: retryAt.toISOString(),
+      });
       return { kind: "retry_scheduled", nextAttemptAt: retryAt, reason: classified.reason };
     }
 
@@ -128,19 +172,35 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
         },
       });
     });
-    log("error", "charge_request.permanently_failed", { chargeRequestId, reason: classified.reason });
+    log("error", "charge_request.permanently_failed", {
+      ...logContext,
+      chargeRequestId,
+      reason: classified.reason,
+      ...(submittedTransactionHash ? { transactionHash: submittedTransactionHash } : {}),
+    });
     return { kind: "permanently_failed", reason: classified.reason };
   }
 
   // Step 2: fresh on-chain mandate read.
   let mandate;
+  const mandateReadStartedAt = performance.now();
   try {
     mandate = await gateway.getMandate(chargeRequest.mandateId);
   } catch (error) {
     if (error instanceof MandateReadError) {
       return fail("processing", classifyContractErrorName(error.errorName));
     }
-    throw error;
+    log("warn", "charge_request.mandate_read_infrastructure_failure", {
+      ...logContext,
+      chargeRequestId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return fail("processing", {
+      failureClass: "transient",
+      reason: "RPC_UNAVAILABLE",
+    });
+  } finally {
+    metrics.recordRpcLatency(performance.now() - mandateReadStartedAt);
   }
 
   let context;
@@ -163,25 +223,94 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
   }
 
   // Steps 3-4: build + simulate.
-  const prepared = await gateway.prepareCharge({
-    mandateId: chargeRequest.mandateId,
-    chargeId: chargeRequest.chargeId,
-    amount: BigInt(chargeRequest.amount),
-    invoiceHash: chargeRequest.invoiceHash,
-  });
+  const simulationStartedAt = performance.now();
+  let signedAuthorizationEntryXdr: string | undefined;
+  if (chargeRequest.authorizationId !== null) {
+    const authorization = await prisma.chargeAuthorization.findUnique({
+      where: { id: chargeRequest.authorizationId },
+    });
+    if (
+      !authorization ||
+      authorization.status !== "ready" ||
+      authorization.signedEntryCiphertext === null ||
+      !deps.authorizationEncryptionKey
+    ) {
+      return fail("processing", permanentReason("MERCHANT_AUTHORIZATION_MISSING"));
+    }
+    if (gateway.getLatestLedgerSequence) {
+      let latestLedger: number;
+      try {
+        latestLedger = await gateway.getLatestLedgerSequence();
+      } catch (error) {
+        log("warn", "charge_request.ledger_read_infrastructure_failure", {
+          ...logContext,
+          chargeRequestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return fail("processing", {
+          failureClass: "transient",
+          reason: "RPC_UNAVAILABLE",
+        });
+      }
+      if (BigInt(authorization.signatureExpirationLedger) <= BigInt(latestLedger)) {
+        await prisma.chargeAuthorization.update({
+          where: { id: authorization.id },
+          data: { status: "expired" },
+        });
+        return fail("processing", permanentReason("MERCHANT_AUTHORIZATION_EXPIRED"));
+      }
+    }
+    try {
+      signedAuthorizationEntryXdr = decryptChargeAuthorization(
+        authorization.signedEntryCiphertext,
+        deps.authorizationEncryptionKey,
+      );
+    } catch {
+      return fail("processing", permanentReason("MERCHANT_AUTHORIZATION_INVALID"));
+    }
+  }
+
+  let prepared;
+  try {
+    prepared = await gateway.prepareCharge({
+      mandateId: chargeRequest.mandateId,
+      chargeId: chargeRequest.chargeId,
+      amount: BigInt(chargeRequest.amount),
+      invoiceHash: chargeRequest.invoiceHash,
+      ...(signedAuthorizationEntryXdr ? { signedAuthorizationEntryXdr } : {}),
+    });
+  } catch (error) {
+    log("warn", "charge_request.simulation_infrastructure_failure", {
+      ...logContext,
+      chargeRequestId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return fail("processing", {
+      failureClass: "transient",
+      reason: "RPC_UNAVAILABLE",
+    });
+  } finally {
+    metrics.recordRpcLatency(performance.now() - simulationStartedAt);
+  }
 
   if (!prepared.simulated.ok) {
+    metrics.recordSimulation(false);
     let classified: ClassifiedFailure;
     try {
       classified = classifyContractErrorName(prepared.simulated.error.info.name);
     } catch (error) {
       if (error instanceof UnclassifiableContractError) {
-        log("error", "charge_request.unclassifiable_contract_error", { chargeRequestId, name: prepared.simulated.error.info.name });
+        log("error", "charge_request.unclassifiable_contract_error", {
+          ...logContext,
+          chargeRequestId,
+          name: prepared.simulated.error.info.name,
+        });
       }
       throw error;
     }
     return fail("processing", classified);
   }
+  metrics.recordSimulation(true);
 
   // Step 5: verify the simulation matches the request — merchant, amount,
   // asset, charge_id, and mandate_id must all agree with fresh on-chain
@@ -201,9 +330,18 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
 
   if (!verificationOk) {
     log("error", "charge_request.simulation_mismatch", {
+      ...logContext,
       chargeRequestId,
-      expected: { merchant: context.merchantWalletAddress, asset: context.expectedAssetAddress, amount: expectedAmount.toString() },
-      simulated: { merchant: receipt.merchant, asset: receipt.asset, amount: receipt.amount.toString() },
+      expected: {
+        merchant: context.merchantWalletAddress,
+        asset: context.expectedAssetAddress,
+        amount: expectedAmount.toString(),
+      },
+      simulated: {
+        merchant: receipt.merchant,
+        asset: receipt.asset,
+        amount: receipt.amount.toString(),
+      },
     });
     return fail("processing", permanentReason(MANUAL_REASON.simulationMismatch));
   }
@@ -213,7 +351,10 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
   await transitionChargeRequest(prisma, chargeRequestId, "simulated", "submitted");
 
   // Step 7: `submit()` polls to a final on-chain result internally.
-  const result = await prepared.submit();
+  const submissionStartedAt = performance.now();
+  const result = await prepared.submit().finally(() => {
+    metrics.recordRpcLatency(performance.now() - submissionStartedAt);
+  });
 
   if (result.kind === "success") {
     const paymentId = result.receipt.paymentId;
@@ -231,11 +372,25 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
           ledger: result.ledger,
         },
       });
-      await transitionChargeRequest(tx, chargeRequestId, "submitted", "succeeded", { transactionHash: result.txHash });
+      await transitionChargeRequest(tx, chargeRequestId, "submitted", "succeeded", {
+        transactionHash: result.txHash,
+      });
+      if (chargeRequest.authorizationId) {
+        await tx.chargeAuthorization.update({
+          where: { id: chargeRequest.authorizationId },
+          data: { status: "consumed", consumedAt: now() },
+        });
+      }
       await enqueueChargeWebhook(tx, {
         merchantId: chargeRequest.merchantId,
         eventType: "payment.succeeded",
-        payload: { chargeRequestId, paymentId, mandateId: chargeRequest.mandateId, chargeId: chargeRequest.chargeId, transactionHash: result.txHash },
+        payload: {
+          chargeRequestId,
+          paymentId,
+          mandateId: chargeRequest.mandateId,
+          chargeId: chargeRequest.chargeId,
+          transactionHash: result.txHash,
+        },
       });
       // `mandate.completed` producer: no on-chain event indexer exists in
       // this codebase (see this module's own doc history and
@@ -249,7 +404,10 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
       // deterministically the one that flips the mandate to `Completed`.
       // `maxSuccessfulCharges === 0` means "unlimited" (PLAN.md §10.8) —
       // never completes on count alone.
-      if (mandate.maxSuccessfulCharges > 0 && mandate.successfulCharges + 1 === mandate.maxSuccessfulCharges) {
+      if (
+        mandate.maxSuccessfulCharges > 0 &&
+        mandate.successfulCharges + 1 === mandate.maxSuccessfulCharges
+      ) {
         await enqueueChargeWebhook(tx, {
           merchantId: chargeRequest.merchantId,
           eventType: "mandate.completed",
@@ -257,20 +415,39 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
         });
       }
     });
-    log("info", "charge_request.succeeded", { chargeRequestId, paymentId, txHash: result.txHash });
+    metrics.recordChargeSuccess(
+      Math.max(0, now().getTime() - chargeRequest.createdAt.getTime()),
+      result.receipt.asset,
+      result.receipt.amount,
+    );
+    log("info", "charge_request.succeeded", {
+      ...logContext,
+      chargeRequestId,
+      paymentId,
+      transactionHash: result.txHash,
+    });
     return { kind: "succeeded", paymentId, txHash: result.txHash };
   }
 
   if (result.kind === "contract_error") {
     if (result.txHash !== undefined) {
-      await prisma.chargeRequest.update({ where: { id: chargeRequestId }, data: { transactionHash: result.txHash } });
+      submittedTransactionHash = result.txHash;
+      await prisma.chargeRequest.update({
+        where: { id: chargeRequestId },
+        data: { transactionHash: result.txHash },
+      });
     }
     let classified: ClassifiedFailure;
     try {
       classified = classifyContractErrorName(result.error.info.name);
     } catch (error) {
       if (error instanceof UnclassifiableContractError) {
-        log("error", "charge_request.unclassifiable_contract_error", { chargeRequestId, name: result.error.info.name });
+        log("error", "charge_request.unclassifiable_contract_error", {
+          ...logContext,
+          chargeRequestId,
+          ...(result.txHash ? { transactionHash: result.txHash } : {}),
+          name: result.error.info.name,
+        });
       }
       throw error;
     }
@@ -278,5 +455,11 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
   }
 
   // infra_error
+  log("warn", "charge_request.submission_infrastructure_failure", {
+    ...logContext,
+    chargeRequestId,
+    reason: result.failure.reason,
+    error: result.message,
+  });
   return fail("submitted", result.failure);
 }

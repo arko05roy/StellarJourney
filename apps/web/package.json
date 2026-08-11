@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:system": "export DATABASE_URL=\"${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/paymap?schema=phase13_system}\" && test \"$SYSTEM_E2E_TESTNET\" = \"1\" && pnpm --filter @paymap/contract-client build && pnpm --filter @paymap/shared build && pnpm --filter @paymap/stellar build && pnpm --filter @paymap/api build && pnpm --filter @paymap/relayer build && pnpm --dir ../.. exec prisma migrate deploy --schema prisma/schema.prisma && playwright test --config playwright.system.config.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

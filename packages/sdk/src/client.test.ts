@@ -1,5 +1,7 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { hash, Keypair, Networks, StrKey } from "@stellar/stellar-sdk";
+import { createUnsignedChargeAuthorization } from "@paymap/stellar";
 import { StellarMandates, StellarMandatesApiError, StellarMandatesNetworkError } from "./client.js";
 import type { FetchLike } from "./http.js";
 
@@ -10,7 +12,11 @@ interface CapturedCall {
   body: unknown;
 }
 
-function fakeFetch(responseStatus: number, responseBody: unknown, calls: CapturedCall[]): FetchLike {
+function fakeFetch(
+  responseStatus: number,
+  responseBody: unknown,
+  calls: CapturedCall[],
+): FetchLike {
   return (async (input: Parameters<FetchLike>[0], init?: Parameters<FetchLike>[1]) => {
     const headers = Object.fromEntries(new Headers(init?.headers).entries());
     calls.push({
@@ -19,7 +25,32 @@ function fakeFetch(responseStatus: number, responseBody: unknown, calls: Capture
       headers,
       body: typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined,
     });
-    return new Response(JSON.stringify(responseBody), { status: responseStatus, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify(responseBody), {
+      status: responseStatus,
+      headers: { "content-type": "application/json" },
+    });
+  }) as FetchLike;
+}
+
+function fakeFetchSequence(
+  responses: { status: number; body: unknown }[],
+  calls: CapturedCall[],
+): FetchLike {
+  let index = 0;
+  return (async (input: Parameters<FetchLike>[0], init?: Parameters<FetchLike>[1]) => {
+    const headers = Object.fromEntries(new Headers(init?.headers).entries());
+    calls.push({
+      url: String(input),
+      method: init?.method ?? "GET",
+      headers,
+      body: typeof init?.body === "string" ? (JSON.parse(init.body) as unknown) : undefined,
+    });
+    const response = responses[index++];
+    if (!response) throw new Error("Unexpected request");
+    return new Response(JSON.stringify(response.body), {
+      status: response.status,
+      headers: { "content-type": "application/json" },
+    });
   }) as FetchLike;
 }
 
@@ -29,7 +60,22 @@ const BASE_URL = "https://api.paymap.test/v1";
 describe("StellarMandates client — request shape", () => {
   it("checkoutSessions.create hits POST /checkout-sessions with auth + auto Idempotency-Key + full body (incl. successUrl/cancelUrl per PLAN.md §17)", async () => {
     const calls: CapturedCall[] = [];
-    const mandates = new StellarMandates({ apiKey: API_KEY, baseUrl: BASE_URL, fetch: fakeFetch(201, { id: "cs_1", merchantId: "m_1", productId: "prod_1", expiresAt: "2026-01-01T00:00:00Z", status: "pending", createdAt: "2026-01-01T00:00:00Z" }, calls) });
+    const mandates = new StellarMandates({
+      apiKey: API_KEY,
+      baseUrl: BASE_URL,
+      fetch: fakeFetch(
+        201,
+        {
+          id: "cs_1",
+          merchantId: "m_1",
+          productId: "prod_1",
+          expiresAt: "2026-01-01T00:00:00Z",
+          status: "pending",
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+        calls,
+      ),
+    });
 
     const result = await mandates.checkoutSessions.create({
       productId: "prod_monthly_ai",
@@ -56,33 +102,90 @@ describe("StellarMandates client — request shape", () => {
 
   it("checkoutSessions.create honors an explicit idempotencyKey instead of generating one", async () => {
     const calls: CapturedCall[] = [];
-    const mandates = new StellarMandates({ apiKey: API_KEY, baseUrl: BASE_URL, fetch: fakeFetch(201, { id: "cs_1" }, calls) });
+    const mandates = new StellarMandates({
+      apiKey: API_KEY,
+      baseUrl: BASE_URL,
+      fetch: fakeFetch(201, { id: "cs_1" }, calls),
+    });
     await mandates.checkoutSessions.create({ productId: "prod_1", idempotencyKey: "my-fixed-key" });
     expect(calls[0]?.headers["idempotency-key"]).toBe("my-fixed-key");
   });
 
-  it("charges.create posts to /mandates/:id/charges, hashes invoiceId into invoiceHash, and drops mandateId/asset/invoiceId from the body", async () => {
+  it("charges.create prepares, merchant-signs, and completes an invocation-bound authorization", async () => {
     const calls: CapturedCall[] = [];
+    const merchant = Keypair.random();
+    const mandateId = randomBytes(32).toString("hex");
+    const chargeId = randomBytes(32).toString("hex");
+    const invoiceHash = createHash("sha256").update("invoice_2026_08_001", "utf8").digest("hex");
+    const context = {
+      merchantAddress: merchant.publicKey(),
+      contractId: StrKey.encodeContract(randomBytes(32)),
+      networkPassphrase: Networks.TESTNET,
+    };
+    const unsignedAuthorizationEntryXdr = createUnsignedChargeAuthorization(
+      context,
+      { mandateId, chargeId, amount: 150_0000000n, invoiceHash },
+      1_001_000,
+    );
     const mandates = new StellarMandates({
       apiKey: API_KEY,
       baseUrl: BASE_URL,
-      fetch: fakeFetch(201, { id: "cr_1", mandateId: "mandate_abc", chargeId: "c_1", amount: "15.00", invoiceHash: "x", scheduledFor: "2026-01-01T00:00:00Z", status: "scheduled", attemptCount: 0, createdAt: "2026-01-01T00:00:00Z" }, calls),
+      signAuthEntry: async (preimage) => ({
+        signedAuthEntry: merchant.sign(hash(Buffer.from(preimage, "base64"))).toString("base64"),
+      }),
+      fetch: fakeFetchSequence(
+        [
+          {
+            status: 201,
+            body: {
+              id: "auth_1",
+              mandateId,
+              chargeId,
+              amount: "15.0000000",
+              invoiceHash,
+              scheduledFor: "2026-01-01T00:00:00Z",
+              ...context,
+              signatureExpirationLedger: 1_001_000,
+              unsignedAuthorizationEntryXdr,
+              authorizationPreimageXdr: "preimage",
+              status: "pending",
+            },
+          },
+          {
+            status: 201,
+            body: {
+              id: "cr_1",
+              mandateId,
+              chargeId,
+              amount: "15.0000000",
+              invoiceHash,
+              scheduledFor: "2026-01-01T00:00:00Z",
+              status: "scheduled",
+              attemptCount: 0,
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          },
+        ],
+        calls,
+      ),
     });
 
     await mandates.charges.create({
-      mandateId: "mandate_abc",
+      mandateId,
       amount: "15.00",
       asset: "USDC",
       invoiceId: "invoice_2026_08_001",
       idempotencyKey: "invoice_2026_08_001",
     });
 
-    const call = calls[0];
-    if (!call) throw new Error("expected one call");
-    expect(call.url).toBe(`${BASE_URL}/mandates/mandate_abc/charges`);
-    expect(call.headers["idempotency-key"]).toBe("invoice_2026_08_001");
-    const expectedHash = createHash("sha256").update("invoice_2026_08_001", "utf8").digest("hex");
-    expect(call.body).toEqual({ amount: "15.00", invoiceHash: expectedHash });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.url).toBe(`${BASE_URL}/mandates/${mandateId}/charge-authorizations`);
+    expect(calls[0]?.headers["idempotency-key"]).toBe("invoice_2026_08_001");
+    expect(calls[0]?.body).toEqual({ amount: "15.00", invoiceHash });
+    expect(calls[1]?.url).toBe(`${BASE_URL}/charge-authorizations/auth_1/complete`);
+    expect(calls[1]?.body).toMatchObject({
+      signedAuthorizationEntryXdr: expect.any(String),
+    });
   });
 
   it("payments.refunds.create posts to /payments/:id/refunds", async () => {
@@ -90,7 +193,18 @@ describe("StellarMandates client — request shape", () => {
     const mandates = new StellarMandates({
       apiKey: API_KEY,
       baseUrl: BASE_URL,
-      fetch: fakeFetch(201, { id: "rr_1", paymentId: "pay_1", refundId: "r_1", amount: "5.00", status: "scheduled", createdAt: "2026-01-01T00:00:00Z" }, calls),
+      fetch: fakeFetch(
+        201,
+        {
+          id: "rr_1",
+          paymentId: "pay_1",
+          refundId: "r_1",
+          amount: "5.00",
+          status: "scheduled",
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+        calls,
+      ),
     });
 
     await mandates.payments.refunds.create({ paymentId: "pay_1", amount: "5.00" });
@@ -104,7 +218,11 @@ describe("StellarMandates client — request shape", () => {
 
   it("mandates.get issues a GET with no Idempotency-Key", async () => {
     const calls: CapturedCall[] = [];
-    const mandates = new StellarMandates({ apiKey: API_KEY, baseUrl: BASE_URL, fetch: fakeFetch(200, { id: "mandate_abc", status: "Active" }, calls) });
+    const mandates = new StellarMandates({
+      apiKey: API_KEY,
+      baseUrl: BASE_URL,
+      fetch: fakeFetch(200, { id: "mandate_abc", status: "Active" }, calls),
+    });
     await mandates.mandates.get("mandate_abc");
     const call = calls[0];
     if (!call) throw new Error("expected one call");
@@ -115,7 +233,11 @@ describe("StellarMandates client — request shape", () => {
 
   it("payments.list builds the query string from mandateId/limit", async () => {
     const calls: CapturedCall[] = [];
-    const mandates = new StellarMandates({ apiKey: API_KEY, baseUrl: BASE_URL, fetch: fakeFetch(200, { data: [] }, calls) });
+    const mandates = new StellarMandates({
+      apiKey: API_KEY,
+      baseUrl: BASE_URL,
+      fetch: fakeFetch(200, { data: [] }, calls),
+    });
     await mandates.payments.list({ mandateId: "mandate_abc", limit: 10 });
     expect(calls[0]?.url).toBe(`${BASE_URL}/payments?mandateId=mandate_abc&limit=10`);
   });
@@ -127,10 +249,17 @@ describe("StellarMandates client — error mapping", () => {
     const mandates = new StellarMandates({
       apiKey: API_KEY,
       baseUrl: BASE_URL,
-      fetch: fakeFetch(409, { code: "MandateRevoked", message: "Contract rejected the request: MandateRevoked." }, calls),
+      fetch: fakeFetch(
+        409,
+        { code: "MandateRevoked", message: "Contract rejected the request: MandateRevoked." },
+        calls,
+      ),
     });
 
-    await expect(mandates.mandates.get("mandate_abc")).rejects.toMatchObject({ code: "MandateRevoked", httpStatus: 409 });
+    await expect(mandates.mandates.get("mandate_abc")).rejects.toMatchObject({
+      code: "MandateRevoked",
+      httpStatus: 409,
+    });
     try {
       await mandates.mandates.get("mandate_abc");
     } catch (error) {
@@ -143,8 +272,14 @@ describe("StellarMandates client — error mapping", () => {
     const throwingFetch: FetchLike = (async () => {
       throw new Error("ECONNREFUSED");
     }) as FetchLike;
-    const mandates = new StellarMandates({ apiKey: API_KEY, baseUrl: BASE_URL, fetch: throwingFetch });
-    await expect(mandates.mandates.get("mandate_abc")).rejects.toBeInstanceOf(StellarMandatesNetworkError);
+    const mandates = new StellarMandates({
+      apiKey: API_KEY,
+      baseUrl: BASE_URL,
+      fetch: throwingFetch,
+    });
+    await expect(mandates.mandates.get("mandate_abc")).rejects.toBeInstanceOf(
+      StellarMandatesNetworkError,
+    );
   });
 
   it("constructing without an apiKey throws immediately", () => {

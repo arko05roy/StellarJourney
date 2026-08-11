@@ -10,11 +10,18 @@ import {
   type TestApp,
 } from "../test/helpers.js";
 import type { Mandate } from "@paymap/contract-client";
+import { hash, type Keypair } from "@stellar/stellar-sdk";
+import { signChargeAuthorization } from "@paymap/stellar";
 
 const ASSET_DECIMALS = 7;
 
 /** Creates a product + checkout session, then links a mandate id to it directly (Phase 10, which drives the real wallet-authorization flow that produces this link, doesn't exist yet — this is the minimal fixture standing in for it). */
-async function linkMandateToProduct(testApp: TestApp, apiKey: string, mandate: Mandate, fixedAmount = "100.00"): Promise<void> {
+async function linkMandateToProduct(
+  testApp: TestApp,
+  apiKey: string,
+  mandate: Mandate,
+  fixedAmount = "100.00",
+): Promise<void> {
   const productResponse = await testApp.app.inject({
     method: "POST",
     url: "/v1/products",
@@ -42,13 +49,54 @@ async function linkMandateToProduct(testApp: TestApp, apiKey: string, mandate: M
   });
   const { id: sessionId } = sessionResponse.json() as { id: string };
 
-  await testApp.prisma.checkoutSession.update({ where: { id: sessionId }, data: { mandateId: mandate.id, status: "completed" } });
+  await testApp.prisma.checkoutSession.update({
+    where: { id: sessionId },
+    data: { mandateId: mandate.id, status: "completed" },
+  });
+}
+
+async function createAuthorizedCharge(
+  testApp: TestApp,
+  apiKey: string,
+  signer: Keypair,
+  mandateId: string,
+  payload: { amount: string; invoiceHash: string; scheduledFor?: string },
+  idempotencyKey = randomHexId32(),
+) {
+  const prepared = await testApp.app.inject({
+    method: "POST",
+    url: `/v1/mandates/${mandateId}/charge-authorizations`,
+    headers: { ...authHeader(apiKey), "idempotency-key": idempotencyKey },
+    payload,
+  });
+  if (prepared.statusCode !== 201) return prepared;
+  const challenge = prepared.json() as {
+    id: string;
+    unsignedAuthorizationEntryXdr: string;
+    merchantAddress: string;
+    contractId: string;
+    networkPassphrase: string;
+  };
+  const signedAuthorizationEntryXdr = await signChargeAuthorization(
+    challenge.unsignedAuthorizationEntryXdr,
+    challenge,
+    async (preimage) => ({
+      signedAuthEntry: signer.sign(hash(Buffer.from(preimage, "base64"))).toString("base64"),
+    }),
+  );
+  return testApp.app.inject({
+    method: "POST",
+    url: `/v1/charge-authorizations/${challenge.id}/complete`,
+    headers: authHeader(apiKey),
+    payload: { signedAuthorizationEntryXdr },
+  });
 }
 
 describe("POST /v1/mandates/:id/charges", () => {
   let testApp: TestApp;
   let apiKey: string;
   let walletAddress: string;
+  let signer: Keypair;
 
   beforeEach(async () => {
     testApp = buildTestApp();
@@ -56,6 +104,7 @@ describe("POST /v1/mandates/:id/charges", () => {
     const merchant = await createTestMerchant(testApp.prisma);
     apiKey = merchant.apiKey;
     walletAddress = merchant.walletAddress;
+    signer = merchant.signer as Keypair;
   });
 
   afterEach(async () => {
@@ -70,7 +119,7 @@ describe("POST /v1/mandates/:id/charges", () => {
 
     const response = await testApp.app.inject({
       method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
+      url: `/v1/mandates/${mandate.id}/charge-authorizations`,
       headers: authHeader(apiKey),
       payload: { amount: "100.00", invoiceHash: randomHexId32() },
     });
@@ -83,11 +132,9 @@ describe("POST /v1/mandates/:id/charges", () => {
     testApp.mandateReader.setMandate(mandate);
     await linkMandateToProduct(testApp, apiKey, mandate);
 
-    const response = await testApp.app.inject({
-      method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
-      headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
-      payload: { amount: "100.00", invoiceHash: randomHexId32() },
+    const response = await createAuthorizedCharge(testApp, apiKey, signer, mandate.id, {
+      amount: "100.00",
+      invoiceHash: randomHexId32(),
     });
     expect(response.statusCode).toBe(201);
     const body = response.json() as { status: string; amount: string; mandateId: string };
@@ -95,7 +142,9 @@ describe("POST /v1/mandates/:id/charges", () => {
     expect(body.amount).toBe("100.0000000");
     expect(body.mandateId).toBe(mandate.id);
 
-    const stored = await testApp.prisma.chargeRequest.findFirst({ where: { mandateId: mandate.id } });
+    const stored = await testApp.prisma.chargeRequest.findFirst({
+      where: { mandateId: mandate.id },
+    });
     expect(stored?.status).toBe("scheduled");
   });
 
@@ -106,7 +155,7 @@ describe("POST /v1/mandates/:id/charges", () => {
 
     const response = await testApp.app.inject({
       method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
+      url: `/v1/mandates/${mandate.id}/charge-authorizations`,
       headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
       payload: { amount: "100.00", invoiceHash: randomHexId32() },
     });
@@ -124,7 +173,7 @@ describe("POST /v1/mandates/:id/charges", () => {
 
     const response = await testApp.app.inject({
       method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
+      url: `/v1/mandates/${mandate.id}/charge-authorizations`,
       headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
       payload: { amount: "100.00", invoiceHash: randomHexId32() },
     });
@@ -133,14 +182,19 @@ describe("POST /v1/mandates/:id/charges", () => {
   });
 
   it("rejects an expired mandate with MandateExpired", async () => {
-    const mandate = buildMandate({ merchant: walletAddress, status: "Active", startAt: 0n, expiresAt: 500n });
+    const mandate = buildMandate({
+      merchant: walletAddress,
+      status: "Active",
+      startAt: 0n,
+      expiresAt: 500n,
+    });
     testApp.mandateReader.setMandate(mandate);
     await linkMandateToProduct(testApp, apiKey, mandate);
     testApp.setNow(new Date(600_000)); // 600 seconds since epoch, past expiresAt = 500
 
     const response = await testApp.app.inject({
       method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
+      url: `/v1/mandates/${mandate.id}/charge-authorizations`,
       headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
       payload: { amount: "100.00", invoiceHash: randomHexId32() },
     });
@@ -160,7 +214,7 @@ describe("POST /v1/mandates/:id/charges", () => {
 
     const response = await testApp.app.inject({
       method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
+      url: `/v1/mandates/${mandate.id}/charge-authorizations`,
       headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
       payload: { amount: "999.00", invoiceHash: randomHexId32() },
     });
@@ -174,7 +228,7 @@ describe("POST /v1/mandates/:id/charges", () => {
 
     const response = await testApp.app.inject({
       method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
+      url: `/v1/mandates/${mandate.id}/charge-authorizations`,
       headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
       payload: { amount: "100.00", invoiceHash: randomHexId32() },
     });
@@ -188,7 +242,7 @@ describe("POST /v1/mandates/:id/charges", () => {
 
     const response = await testApp.app.inject({
       method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
+      url: `/v1/mandates/${mandate.id}/charge-authorizations`,
       headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
       payload: { amount: "not-a-number", invoiceHash: randomHexId32() },
     });
@@ -199,11 +253,24 @@ describe("POST /v1/mandates/:id/charges", () => {
     const mandate = buildMandate({ merchant: walletAddress, status: "Active", startAt: 0n });
     testApp.mandateReader.setMandate(mandate);
     await linkMandateToProduct(testApp, apiKey, mandate);
-    const headers = { ...authHeader(apiKey), "idempotency-key": "charge-replay" };
     const payload = { amount: "100.00", invoiceHash: randomHexId32() };
 
-    const first = await testApp.app.inject({ method: "POST", url: `/v1/mandates/${mandate.id}/charges`, headers, payload });
-    const second = await testApp.app.inject({ method: "POST", url: `/v1/mandates/${mandate.id}/charges`, headers, payload });
+    const first = await createAuthorizedCharge(
+      testApp,
+      apiKey,
+      signer,
+      mandate.id,
+      payload,
+      "charge-replay",
+    );
+    const second = await createAuthorizedCharge(
+      testApp,
+      apiKey,
+      signer,
+      mandate.id,
+      payload,
+      "charge-replay",
+    );
 
     expect(first.json()).toEqual(second.json());
     const count = await testApp.prisma.chargeRequest.count({ where: { mandateId: mandate.id } });
@@ -215,6 +282,7 @@ describe("GET /v1/charges", () => {
   let testApp: TestApp;
   let apiKey: string;
   let walletAddress: string;
+  let signer: Keypair;
 
   beforeEach(async () => {
     testApp = buildTestApp();
@@ -222,6 +290,7 @@ describe("GET /v1/charges", () => {
     const merchant = await createTestMerchant(testApp.prisma);
     apiKey = merchant.apiKey;
     walletAddress = merchant.walletAddress;
+    signer = merchant.signer as Keypair;
   });
 
   afterEach(async () => {
@@ -239,21 +308,20 @@ describe("GET /v1/charges", () => {
     testApp.mandateReader.setMandate(mandate);
     await linkMandateToProduct(testApp, apiKey, mandate);
 
-    const scheduled = await testApp.app.inject({
-      method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
-      headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
-      payload: { amount: "100.00", invoiceHash: randomHexId32() },
+    const scheduled = await createAuthorizedCharge(testApp, apiKey, signer, mandate.id, {
+      amount: "100.00",
+      invoiceHash: randomHexId32(),
     });
     const { id: scheduledId } = scheduled.json() as { id: string };
-    const failed = await testApp.app.inject({
-      method: "POST",
-      url: `/v1/mandates/${mandate.id}/charges`,
-      headers: { ...authHeader(apiKey), "idempotency-key": randomHexId32() },
-      payload: { amount: "100.00", invoiceHash: randomHexId32() },
+    const failed = await createAuthorizedCharge(testApp, apiKey, signer, mandate.id, {
+      amount: "100.00",
+      invoiceHash: randomHexId32(),
     });
     const { id: failedId } = failed.json() as { id: string };
-    await testApp.prisma.chargeRequest.update({ where: { id: failedId }, data: { status: "permanently_failed", failureCode: "InsufficientBalance" } });
+    await testApp.prisma.chargeRequest.update({
+      where: { id: failedId },
+      data: { status: "permanently_failed", failureCode: "InsufficientBalance" },
+    });
 
     const response = await testApp.app.inject({
       method: "GET",
@@ -261,14 +329,20 @@ describe("GET /v1/charges", () => {
       headers: authHeader(apiKey),
     });
     expect(response.statusCode).toBe(200);
-    const body = response.json() as { data: { id: string; status: string; failureCode?: string }[] };
+    const body = response.json() as {
+      data: { id: string; status: string; failureCode?: string }[];
+    };
     expect(body.data.map((c) => c.id)).toEqual([failedId]);
     expect(body.data[0]?.failureCode).toBe("InsufficientBalance");
     expect(body.data.map((c) => c.id)).not.toContain(scheduledId);
   });
 
   it("rejects an unknown status value rather than silently ignoring it", async () => {
-    const response = await testApp.app.inject({ method: "GET", url: "/v1/charges?status=not_a_real_status", headers: authHeader(apiKey) });
+    const response = await testApp.app.inject({
+      method: "GET",
+      url: "/v1/charges?status=not_a_real_status",
+      headers: authHeader(apiKey),
+    });
     expect(response.statusCode).toBe(400);
     expect(response.json().code).toBe("INVALID_STATUS_FILTER");
   });

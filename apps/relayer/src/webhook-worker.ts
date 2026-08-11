@@ -11,6 +11,7 @@ import type { HostResolver } from "@paymap/shared";
 import { processWebhookDelivery, type WebhookLogger } from "./webhook-delivery.js";
 import { WEBHOOK_DELIVERY_QUEUE_NAME, type WebhookDeliveryJobData } from "./webhook-queue.js";
 import type { sendWebhook } from "./webhook-http.js";
+import type { Observability } from "./observability.js";
 
 export interface CreateWebhookDeliveryWorkerOptions {
   connection: ConnectionOptions;
@@ -20,11 +21,14 @@ export interface CreateWebhookDeliveryWorkerOptions {
   resolveWebhookHost?: HostResolver;
   now?: () => Date;
   logger?: WebhookLogger;
+  observability?: Observability;
   concurrency?: number;
   send?: typeof sendWebhook;
 }
 
-export function createWebhookDeliveryWorker(options: CreateWebhookDeliveryWorkerOptions): Worker<WebhookDeliveryJobData> {
+export function createWebhookDeliveryWorker(
+  options: CreateWebhookDeliveryWorkerOptions,
+): Worker<WebhookDeliveryJobData> {
   return new Worker<WebhookDeliveryJobData>(
     WEBHOOK_DELIVERY_QUEUE_NAME,
     async (job) => {
@@ -36,6 +40,7 @@ export function createWebhookDeliveryWorker(options: CreateWebhookDeliveryWorker
           allowInsecureWebhookHttp: options.allowInsecureWebhookHttp ?? false,
           ...(options.resolveWebhookHost ? { resolveWebhookHost: options.resolveWebhookHost } : {}),
           ...(options.logger ? { logger: options.logger } : {}),
+          ...(options.observability ? { observability: options.observability } : {}),
           ...(options.send ? { send: options.send } : {}),
         },
         job.data.webhookDeliveryId,

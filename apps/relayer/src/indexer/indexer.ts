@@ -36,6 +36,7 @@ import type { Logger } from "../pipeline.js";
 import type { ChainEventsGateway } from "./chain-events-gateway.js";
 import { getIndexerCursor, advanceIndexerCursor, type IndexerCursorState } from "./cursor.js";
 import { applyMandateLifecycleEvent, type MandateReader } from "./mandate-index-sync.js";
+import type { Observability } from "../observability.js";
 
 export const DEFAULT_INITIAL_LOOKBACK_LEDGERS = 100;
 export const DEFAULT_PAGE_LIMIT = 100;
@@ -58,7 +59,15 @@ export class IndexerRetentionGapError extends Error {
   }
 }
 
-const RETENTION_ERROR_HINTS = ["oldest ledger", "before the oldest", "outside the ledger range", "cursor", "startledger", "start ledger", "ledger range"];
+const RETENTION_ERROR_HINTS = [
+  "oldest ledger",
+  "before the oldest",
+  "outside the ledger range",
+  "cursor",
+  "startledger",
+  "start ledger",
+  "ledger range",
+];
 
 /**
  * Heuristic match on common Soroban RPC error wording for an invalid/pruned
@@ -80,6 +89,7 @@ export interface IndexerDeps {
   events: ChainEventsGateway;
   mandateReader: MandateReader;
   logger?: Logger;
+  observability?: Observability;
   initialLookbackLedgers?: number;
   pageLimit?: number;
 }
@@ -126,9 +136,16 @@ export async function runIndexerTick(deps: IndexerDeps): Promise<IndexerTickResu
     await applyMandateLifecycleEvent(deps.prisma, event, deps.mandateReader, log);
   }
 
-  const newLastLedger = page.pageMaxLedger ?? stored?.lastLedger ?? ("startLedger" in request ? request.startLedger : page.latestLedger);
+  const newLastLedger =
+    page.pageMaxLedger ??
+    stored?.lastLedger ??
+    ("startLedger" in request ? request.startLedger : page.latestLedger);
   const next: IndexerCursorState = { lastLedger: newLastLedger, cursor: page.cursor };
   await advanceIndexerCursor(deps.prisma, stored, next);
+  if (deps.observability) {
+    const activeMandates = await deps.prisma.mandateIndex.count({ where: { status: "Active" } });
+    deps.observability.setActiveMandates(activeMandates);
+  }
 
   return { processed: page.events.length };
 }

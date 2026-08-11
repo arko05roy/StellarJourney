@@ -13,6 +13,7 @@ import type { PrismaClient } from "./db.js";
 import type { ChainGateway } from "./chain-gateway.js";
 import { processChargeRequest, type Logger } from "./pipeline.js";
 import { CHARGE_QUEUE_NAME, type ChargeJobData } from "./queue.js";
+import type { Observability } from "./observability.js";
 
 export interface CreateChargeWorkerOptions {
   connection: ConnectionOptions;
@@ -20,6 +21,8 @@ export interface CreateChargeWorkerOptions {
   gateway: ChainGateway;
   now?: () => Date;
   logger?: Logger;
+  observability?: Observability;
+  authorizationEncryptionKey?: string;
   concurrency?: number;
 }
 
@@ -28,7 +31,16 @@ export function createChargeWorker(options: CreateChargeWorkerOptions): Worker<C
     CHARGE_QUEUE_NAME,
     async (job) => {
       await processChargeRequest(
-        { prisma: options.prisma, gateway: options.gateway, now: options.now ?? (() => new Date()), ...(options.logger ? { logger: options.logger } : {}) },
+        {
+          prisma: options.prisma,
+          gateway: options.gateway,
+          now: options.now ?? (() => new Date()),
+          ...(options.logger ? { logger: options.logger } : {}),
+          ...(options.observability ? { observability: options.observability } : {}),
+          ...(options.authorizationEncryptionKey
+            ? { authorizationEncryptionKey: options.authorizationEncryptionKey }
+            : {}),
+        },
         job.data.chargeRequestId,
       );
     },

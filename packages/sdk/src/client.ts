@@ -5,9 +5,12 @@
  * `payments.refunds.create` and a handful of reads).
  */
 import { createHash, randomUUID } from "node:crypto";
+import type { SignAuthEntry } from "@stellar/stellar-sdk/contract";
+import { signChargeAuthorization } from "@paymap/stellar";
 import { HttpClient, type FetchLike } from "./http.js";
 import type {
   ChargeResponse,
+  ChargeAuthorizationChallenge,
   CheckoutSessionResponse,
   CreateChargeInput,
   CreateCheckoutSessionInput,
@@ -29,6 +32,8 @@ export interface StellarMandatesOptions {
   fetch?: FetchLike;
   /** Per-request timeout. Default 15s. */
   timeoutMs?: number;
+  /** Merchant-controlled signer. It receives only invocation-bound Soroban auth preimages. */
+  signAuthEntry?: SignAuthEntry;
 }
 
 const DEFAULT_BASE_URL = "http://localhost:3001/v1";
@@ -55,7 +60,12 @@ class CheckoutSessionsResource {
    */
   async create(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResponse> {
     const { idempotencyKey, ...body } = input;
-    return this.http.request<CheckoutSessionResponse>("POST", "/checkout-sessions", body, idempotencyKey ?? randomUUID());
+    return this.http.request<CheckoutSessionResponse>(
+      "POST",
+      "/checkout-sessions",
+      body,
+      idempotencyKey ?? randomUUID(),
+    );
   }
 
   /**
@@ -65,12 +75,18 @@ class CheckoutSessionsResource {
    * ```
    */
   async get(checkoutSessionId: string): Promise<CheckoutSessionResponse> {
-    return this.http.request<CheckoutSessionResponse>("GET", `/checkout-sessions/${encodeURIComponent(checkoutSessionId)}`);
+    return this.http.request<CheckoutSessionResponse>(
+      "GET",
+      `/checkout-sessions/${encodeURIComponent(checkoutSessionId)}`,
+    );
   }
 }
 
 class ChargesResource {
-  constructor(private readonly http: HttpClient) {}
+  constructor(
+    private readonly http: HttpClient,
+    private readonly signAuthEntry?: SignAuthEntry,
+  ) {}
 
   /**
    * @example
@@ -85,9 +101,33 @@ class ChargesResource {
    * ```
    */
   async create(input: CreateChargeInput): Promise<ChargeResponse> {
+    if (!this.signAuthEntry) {
+      throw new Error(
+        "charges.create requires StellarMandatesOptions.signAuthEntry; merchant keys must remain outside the API and relayer.",
+      );
+    }
     const { mandateId, asset: _asset, invoiceId, idempotencyKey, ...rest } = input;
     const body = { ...rest, invoiceHash: hashInvoiceId(invoiceId) };
-    return this.http.request<ChargeResponse>("POST", `/mandates/${encodeURIComponent(mandateId)}/charges`, body, idempotencyKey ?? randomUUID());
+    const challenge = await this.http.request<ChargeAuthorizationChallenge>(
+      "POST",
+      `/mandates/${encodeURIComponent(mandateId)}/charge-authorizations`,
+      body,
+      idempotencyKey ?? randomUUID(),
+    );
+    const signedAuthorizationEntryXdr = await signChargeAuthorization(
+      challenge.unsignedAuthorizationEntryXdr,
+      {
+        merchantAddress: challenge.merchantAddress,
+        contractId: challenge.contractId,
+        networkPassphrase: challenge.networkPassphrase,
+      },
+      this.signAuthEntry,
+    );
+    return this.http.request<ChargeResponse>(
+      "POST",
+      `/charge-authorizations/${encodeURIComponent(challenge.id)}/complete`,
+      { signedAuthorizationEntryXdr },
+    );
   }
 
   /**
@@ -97,7 +137,10 @@ class ChargesResource {
    * ```
    */
   async get(chargeRequestId: string): Promise<ChargeResponse> {
-    return this.http.request<ChargeResponse>("GET", `/charges/${encodeURIComponent(chargeRequestId)}`);
+    return this.http.request<ChargeResponse>(
+      "GET",
+      `/charges/${encodeURIComponent(chargeRequestId)}`,
+    );
   }
 }
 
@@ -115,7 +158,12 @@ class RefundsResource {
    */
   async create(input: CreateRefundInput): Promise<RefundResponse> {
     const { paymentId, idempotencyKey, ...rest } = input;
-    return this.http.request<RefundResponse>("POST", `/payments/${encodeURIComponent(paymentId)}/refunds`, rest, idempotencyKey ?? randomUUID());
+    return this.http.request<RefundResponse>(
+      "POST",
+      `/payments/${encodeURIComponent(paymentId)}/refunds`,
+      rest,
+      idempotencyKey ?? randomUUID(),
+    );
   }
 }
 
@@ -184,7 +232,7 @@ export class StellarMandates {
       timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     });
     this.checkoutSessions = new CheckoutSessionsResource(http);
-    this.charges = new ChargesResource(http);
+    this.charges = new ChargesResource(http, options.signAuthEntry);
     this.payments = new PaymentsResource(http);
     this.mandates = new MandatesResource(http);
   }

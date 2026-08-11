@@ -1,6 +1,10 @@
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { baseUnitsToDecimalString, decimalToPositiveBaseUnits, MoneyConversionError } from "@paymap/shared";
+import {
+  baseUnitsToDecimalString,
+  decimalToPositiveBaseUnits,
+  MoneyConversionError,
+} from "@paymap/shared";
 import { badRequest, notFoundError, unprocessableError } from "../errors.js";
 import { createAuthPreHandler, requireMerchantContext } from "../auth/plugin.js";
 import { CreateRefundSchema } from "../schemas/refunds.js";
@@ -14,7 +18,10 @@ function requireIdempotencyKey(request: FastifyRequest): string {
   const header = request.headers["idempotency-key"];
   const value = Array.isArray(header) ? header[0] : header;
   if (!value) {
-    throw badRequest("MISSING_IDEMPOTENCY_KEY", 'This endpoint requires an "Idempotency-Key" header.');
+    throw badRequest(
+      "MISSING_IDEMPOTENCY_KEY",
+      'This endpoint requires an "Idempotency-Key" header.',
+    );
   }
   return IdempotencyKeyHeaderSchema.parse(value);
 }
@@ -56,51 +63,77 @@ const ListRefundsQuerySchema = z.object({
 });
 
 const paymentsRoutes: FastifyPluginAsync = async (app) => {
-  app.get("/payments", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
-    const { merchant } = requireMerchantContext(request);
-    const query = ListPaymentsQuerySchema.parse(request.query);
+  app.get(
+    "/payments",
+    { preHandler: createAuthPreHandler(app.prisma, app.hashSecret, ["payments:read"]) },
+    async (request, reply) => {
+      const { merchant } = requireMerchantContext(request);
+      const query = ListPaymentsQuerySchema.parse(request.query);
 
-    const payments = await app.prisma.payment.findMany({
-      where: { merchantId: merchant.id, ...(query.mandateId ? { mandateId: query.mandateId } : {}) },
-      orderBy: { createdAt: "desc" },
-      take: query.limit,
-    });
+      const payments = await app.prisma.payment.findMany({
+        where: {
+          merchantId: merchant.id,
+          ...(query.mandateId ? { mandateId: query.mandateId } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: query.limit,
+      });
 
-    const withDecimals = await Promise.all(
-      payments.map(async (payment) => {
-        const decimals = await resolveAssetDecimalsForMandate(app.prisma, merchant.id, payment.mandateId).catch(() => 7);
-        return toPaymentResponse(payment, decimals);
-      }),
-    );
+      const withDecimals = await Promise.all(
+        payments.map(async (payment) => {
+          const decimals = await resolveAssetDecimalsForMandate(
+            app.prisma,
+            merchant.id,
+            payment.mandateId,
+          ).catch(() => 7);
+          return toPaymentResponse(payment, decimals);
+        }),
+      );
 
-    reply.status(200).send({ data: withDecimals });
-  });
+      reply.status(200).send({ data: withDecimals });
+    },
+  );
 
   /** Merchant-scoped refund-request list, optionally filtered by payment — backs the dashboard's "Refunds" view (PLAN.md §16.3). */
-  app.get("/refunds", { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) }, async (request, reply) => {
-    const { merchant } = requireMerchantContext(request);
-    const query = ListRefundsQuerySchema.parse(request.query);
+  app.get(
+    "/refunds",
+    { preHandler: createAuthPreHandler(app.prisma, app.hashSecret, ["refunds:read"]) },
+    async (request, reply) => {
+      const { merchant } = requireMerchantContext(request);
+      const query = ListRefundsQuerySchema.parse(request.query);
 
-    const refundRequests = await app.prisma.refundRequest.findMany({
-      where: { merchantId: merchant.id, ...(query.paymentId ? { paymentId: query.paymentId } : {}) },
-      orderBy: { createdAt: "desc" },
-      take: query.limit,
-    });
+      const refundRequests = await app.prisma.refundRequest.findMany({
+        where: {
+          merchantId: merchant.id,
+          ...(query.paymentId ? { paymentId: query.paymentId } : {}),
+        },
+        orderBy: { createdAt: "desc" },
+        take: query.limit,
+      });
 
-    const withDecimals = await Promise.all(
-      refundRequests.map(async (refundRequest) => {
-        const payment = await app.prisma.payment.findUnique({ where: { paymentId: refundRequest.paymentId } });
-        const decimals = payment ? await resolveAssetDecimalsForMandate(app.prisma, merchant.id, payment.mandateId).catch(() => 7) : 7;
-        return toRefundRequestResponse(refundRequest, decimals);
-      }),
-    );
+      const withDecimals = await Promise.all(
+        refundRequests.map(async (refundRequest) => {
+          const payment = await app.prisma.payment.findUnique({
+            where: { paymentId: refundRequest.paymentId },
+          });
+          const decimals = payment
+            ? await resolveAssetDecimalsForMandate(
+                app.prisma,
+                merchant.id,
+                payment.mandateId,
+              ).catch(() => 7)
+            : 7;
+          return toRefundRequestResponse(refundRequest, decimals);
+        }),
+      );
 
-    reply.status(200).send({ data: withDecimals });
-  });
+      reply.status(200).send({ data: withDecimals });
+    },
+  );
 
   app.post(
     "/payments/:id/refunds",
-    { preHandler: createAuthPreHandler(app.prisma, app.hashSecret) },
+    { preHandler: createAuthPreHandler(app.prisma, app.hashSecret, ["refunds:write"]) },
     async (request, reply) => {
       const { merchant } = requireMerchantContext(request);
       const idempotencyKey = requireIdempotencyKey(request);
@@ -108,12 +141,18 @@ const paymentsRoutes: FastifyPluginAsync = async (app) => {
       const input = CreateRefundSchema.parse(request.body);
       const requestHash = computeRequestHash(request.body);
 
-      const payment = await app.prisma.payment.findFirst({ where: { paymentId, merchantId: merchant.id } });
+      const payment = await app.prisma.payment.findFirst({
+        where: { paymentId, merchantId: merchant.id },
+      });
       if (!payment) {
         throw notFoundError("PaymentNotFound", `No payment "${paymentId}" for this merchant.`);
       }
 
-      const decimals = await resolveAssetDecimalsForMandate(app.prisma, merchant.id, payment.mandateId);
+      const decimals = await resolveAssetDecimalsForMandate(
+        app.prisma,
+        merchant.id,
+        payment.mandateId,
+      );
 
       let amountBaseUnits: bigint;
       try {
@@ -130,7 +169,8 @@ const paymentsRoutes: FastifyPluginAsync = async (app) => {
       // accepting a refund request that could exceed the payment.
       const onChainRefundedTotal = await app.mandateReader.getRefundedTotal(paymentId);
       const dbRefundedTotal = BigInt(payment.refundedTotal);
-      const refundedTotal = onChainRefundedTotal > dbRefundedTotal ? onChainRefundedTotal : dbRefundedTotal;
+      const refundedTotal =
+        onChainRefundedTotal > dbRefundedTotal ? onChainRefundedTotal : dbRefundedTotal;
       const paymentAmount = BigInt(payment.amount);
       if (refundedTotal + amountBaseUnits > paymentAmount) {
         // Mirrors the contract's own error name (CLAUDE.md §8), even though
@@ -140,23 +180,35 @@ const paymentsRoutes: FastifyPluginAsync = async (app) => {
         // `prisma/schema.prisma`), so there is no contract call to decode
         // this error *from* yet. Using the same name keeps the code stable
         // across whichever phase adds real submission.
-        throw unprocessableError("RefundExceedsPayment", "Refund amount would exceed the original payment amount.");
+        throw unprocessableError(
+          "RefundExceedsPayment",
+          "Refund amount would exceed the original payment amount.",
+        );
       }
 
-      const outcome = await runIdempotent(app.prisma, merchant.id, idempotencyKey, requestHash, async (tx) => {
-        const refundRequest = await tx.refundRequest.create({
-          data: {
-            merchantId: merchant.id,
-            paymentId: payment.paymentId,
-            refundId: randomHexId32(),
-            amount: amountBaseUnits.toString(),
-            // status defaults to "scheduled" — submission is a future phase (see RefundRequest module doc in prisma/schema.prisma).
-          },
-        });
-        return { status: 201, body: toRefundRequestResponse(refundRequest, decimals) };
-      });
+      const outcome = await runIdempotent(
+        app.prisma,
+        merchant.id,
+        idempotencyKey,
+        requestHash,
+        async (tx) => {
+          const refundRequest = await tx.refundRequest.create({
+            data: {
+              merchantId: merchant.id,
+              paymentId: payment.paymentId,
+              refundId: randomHexId32(),
+              amount: amountBaseUnits.toString(),
+              // status defaults to "scheduled" — submission is a future phase (see RefundRequest module doc in prisma/schema.prisma).
+            },
+          });
+          return { status: 201, body: toRefundRequestResponse(refundRequest, decimals) };
+        },
+      );
 
-      reply.status(outcome.status).header("Idempotency-Replayed", String(outcome.replayed)).send(outcome.body);
+      reply
+        .status(outcome.status)
+        .header("Idempotency-Replayed", String(outcome.replayed))
+        .send(outcome.body);
     },
   );
 };

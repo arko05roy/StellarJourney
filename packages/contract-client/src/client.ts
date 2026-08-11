@@ -17,7 +17,11 @@
  * signer-agnostic.
  */
 import type { SignAuthEntry, SignTransaction } from "@stellar/stellar-sdk/contract";
-import { Client as GeneratedClient } from "./generated/mandate-registry.js";
+import { Operation, TransactionBuilder, xdr } from "@stellar/stellar-sdk";
+import {
+  Client as GeneratedClient,
+  Errors as GeneratedErrors,
+} from "./generated/mandate-registry.js";
 import {
   fromDomainMandateInput,
   hexToId,
@@ -64,15 +68,33 @@ export function createMandateRegistryClient(
   deployment: DeploymentRecord,
   options: MandateRegistryClientOptions = {},
 ): GeneratedClient {
-  return new GeneratedClient({
+  const client = new GeneratedClient({
     contractId: options.contractId ?? deployment.contractId,
     networkPassphrase: options.networkPassphrase ?? deployment.networkPassphrase,
     rpcUrl: options.rpcUrl ?? deployment.rpcUrl,
+    errorTypes: GeneratedErrors,
     ...(options.publicKey !== undefined ? { publicKey: options.publicKey } : {}),
     ...(options.signTransaction !== undefined ? { signTransaction: options.signTransaction } : {}),
     ...(options.signAuthEntry !== undefined ? { signAuthEntry: options.signAuthEntry } : {}),
     ...(options.allowHttp !== undefined ? { allowHttp: options.allowHttp } : {}),
   });
+
+  // stellar-sdk 16 builds each method's error map from the contract spec's
+  // error-case `doc` field, overwriting `options.errorTypes`. Soroban emits
+  // empty docs for this `#[contracterror]` enum, while codegen separately
+  // produced the correct names in `GeneratedErrors`; without this repair a
+  // live `Error(Contract, #4)` becomes `{message: ""}` instead of
+  // `MandateRevoked`. Fill the in-memory spec once so every dynamically
+  // assembled method gets the generated ABI names. No generated source is
+  // edited.
+  for (const errorCase of client.spec.errorCases()) {
+    const generated = GeneratedErrors[errorCase.value() as keyof typeof GeneratedErrors];
+    if (generated !== undefined) {
+      errorCase.doc(generated.message);
+    }
+  }
+
+  return client;
 }
 
 /** Health-check. */
@@ -91,7 +113,10 @@ export async function getMandate(client: GeneratedClient, mandateId: string): Pr
 }
 
 /** Read-only. Throws {@link MandateReadError} (`PaymentNotFound`) if no receipt exists. */
-export async function getPayment(client: GeneratedClient, paymentId: string): Promise<PaymentReceipt> {
+export async function getPayment(
+  client: GeneratedClient,
+  paymentId: string,
+): Promise<PaymentReceipt> {
   const tx = await client.get_payment({ payment_id: hexToId(paymentId) });
   if (tx.result.isErr()) {
     throw new MandateReadError(tx.result.unwrapErr().message);
@@ -109,7 +134,10 @@ export async function getRefund(client: GeneratedClient, refundId: string): Prom
 }
 
 /** Read-only. Cumulative amount refunded against `paymentId` so far (`0n` if none). */
-export async function getRefundedTotal(client: GeneratedClient, paymentId: string): Promise<bigint> {
+export async function getRefundedTotal(
+  client: GeneratedClient,
+  paymentId: string,
+): Promise<bigint> {
   const tx = await client.get_refunded_total({ payment_id: hexToId(paymentId) });
   return tx.result;
 }
@@ -152,13 +180,59 @@ export interface ChargeArgs {
  * `Mandate` (see `contracts/mandate-registry/src/charge.rs` module doc),
  * which is what makes relayer redirection structurally impossible.
  */
-export async function buildCharge(client: GeneratedClient, args: ChargeArgs) {
-  return client.charge({
+export async function buildCharge(
+  client: GeneratedClient,
+  args: ChargeArgs,
+  signedAuthorizationEntryXdr?: string,
+) {
+  const invocationArgs = {
     mandate_id: hexToId(args.mandateId),
     charge_id: hexToId(args.chargeId),
     amount: args.amount,
     invoice_hash: hexToId(args.invoiceHash),
+  };
+  if (signedAuthorizationEntryXdr === undefined) {
+    return client.charge(invocationArgs);
+  }
+
+  const tx = await client.charge(invocationArgs, { simulate: false });
+  if (!tx.raw) {
+    throw new Error("Charge authorization requires an assembled transaction builder.");
+  }
+  // With `simulate: false`, stellar-sdk intentionally exposes `raw` and
+  // leaves `built` unset so callers can modify the transaction before its
+  // first simulation.
+  tx.built = tx.raw.build();
+  if (!tx.built || !("operations" in tx.built) || tx.built.operations.length !== 1) {
+    throw new Error("Charge authorization requires one built invoke-contract operation.");
+  }
+  const operation = tx.built.operations[0];
+  if (!operation || operation.type !== "invokeHostFunction") {
+    throw new Error("Charge authorization can only attach to invokeHostFunction.");
+  }
+  const signedAuthorizationEntry = xdr.SorobanAuthorizationEntry.fromXDR(
+    signedAuthorizationEntryXdr,
+    "base64",
+  );
+  // `Transaction.operations` is a decoded view of the envelope. Mutating that
+  // view does not update the transaction XDR that RPC simulation receives.
+  // Rebuild the operation so the signed authorization is embedded in the
+  // envelope and survives simulation/assembly.
+  const withAuthorization = TransactionBuilder.cloneFrom(tx.built, {
+    fee: tx.built.fee,
+    networkPassphrase: tx.built.networkPassphrase,
   });
+  withAuthorization.clearOperations();
+  withAuthorization.addOperation(
+    Operation.invokeHostFunction({
+      ...(operation.source !== undefined ? { source: operation.source } : {}),
+      func: operation.func,
+      auth: [signedAuthorizationEntry],
+    }),
+  );
+  tx.built = withAuthorization.build();
+  await tx.simulate();
+  return tx;
 }
 
 export interface RefundArgs {

@@ -1,5 +1,11 @@
 # Lessons
 
+## Deployment handoff
+
+- Mistake: gave a broad plan when the user asked what inputs were needed.
+- Rule: list only exact external blockers: provider login/access, deployable Git ref, and required
+  runtime secret; explicitly say when domain/email are optional.
+
 - soroban-sdk 27 `#[contracttype]` enums: named-field (struct-style) variants
   are rejected at compile time ("enum variant X has unsupported named
   fields"). Only unit variants and non-empty tuple variants work. Before

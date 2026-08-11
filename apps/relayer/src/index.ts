@@ -1,16 +1,9 @@
 /**
  * Untrusted relayer entrypoint (BullMQ worker + due-charge scheduler).
  *
- * NOTE — a known, documented gap this phase surfaces rather than silently
- * papering over (see `chain-gateway.ts`'s module doc, `docs/threat-model.md`'s
- * "merchant charge authorization" entry, and `tasks/todo.md`'s Phase 9
- * review): `contracts/mandate-registry/src/charge.rs` requires
- * `mandate.merchant.require_auth()` on every call, and no mechanism yet
- * exists for a merchant's signature to reach this untrusted process without
- * it custodying a merchant secret key. `resolveMerchantSigner` below throws
- * loudly rather than pretending this is solved — a future phase must supply
- * the real mechanism (most likely: the merchant's own backend pre-signs the
- * auth entry at charge-request time and the API persists the signed XDR).
+ * Merchant authorization arrives as an invocation-bound signed Soroban auth
+ * entry. The API validates and encrypts it; the relayer never receives a
+ * merchant secret key.
  */
 import { createPrismaClient } from "./db.js";
 import { loadRelayerConfig } from "./config.js";
@@ -24,32 +17,81 @@ import { createWebhookDeliveryQueue } from "./webhook-queue.js";
 import { startWebhookScheduler } from "./webhook-scheduler.js";
 import { createSorobanChainEventsGateway } from "./indexer/chain-events-gateway.js";
 import { startIndexerScheduler } from "./indexer/scheduler.js";
+import { ObservabilityRegistry } from "./observability.js";
+import { createSafeJsonLogger } from "./secure-logger.js";
+import { startMetricsServer } from "./metrics-server.js";
+import { INDEXER_CURSOR_ID } from "./indexer/cursor.js";
 
-const consoleLogger: Logger = (level, event, fields) => {
-  const line = `[relayer] ${event} ${JSON.stringify(fields)}`;
+const consoleLogger: Logger = createSafeJsonLogger("relayer", (level, line) => {
   if (level === "error") console.error(line);
   else if (level === "warn") console.warn(line);
   else console.log(line);
-};
+});
 
 async function main(): Promise<void> {
   const config = loadRelayerConfig();
   const prisma = createPrismaClient();
   const connection = createRedisConnection(config.redisUrl);
   const queue = createChargeQueue(connection);
-
+  const observability = new ObservabilityRegistry();
+  const metricsServer = startMetricsServer({
+    port: Number(process.env["PORT"] ?? process.env["METRICS_PORT"] ?? 9464),
+    observability,
+    ready: async () => {
+      await prisma.$queryRaw`SELECT 1`;
+      if (connection.status !== "ready") throw new Error("Redis is not connected.");
+      if ((await connection.ping()) !== "PONG") throw new Error("Redis is not ready.");
+    },
+  });
   const gateway = createSorobanChainGateway({
     deployment: config.deployment,
     relayerSigner: config.relayerSigner,
-    resolveMerchantSigner: () => {
-      throw new Error(
-        "No merchant-signer resolution mechanism is configured for this relayer process (documented gap — see chain-gateway.ts's module doc). " +
-          "A future phase must define how a merchant's charge authorization reaches the relayer without it custodying a merchant secret key.",
-      );
-    },
   });
+  const collectOperationalMetrics = async (): Promise<void> => {
+    const [waiting, active, delayed, deadLetters, stuckSubmitted, cursor, latestLedger] =
+      await Promise.all([
+        queue.getWaitingCount(),
+        queue.getActiveCount(),
+        queue.getDelayedCount(),
+        prisma.webhookDelivery.count({ where: { status: "dead_letter" } }),
+        prisma.chargeRequest.count({
+          where: {
+            status: "submitted",
+            updatedAt: { lte: new Date(Date.now() - 15 * 60_000) },
+          },
+        }),
+        prisma.indexerCursor.findUnique({ where: { id: INDEXER_CURSOR_ID } }),
+        gateway.getLatestLedgerSequence?.(),
+      ]);
+    observability.setQueueDepth(waiting + active + delayed);
+    observability.setWebhookDeadLetters(deadLetters);
+    observability.setStuckSubmittedCharges(stuckSubmitted);
+    if (cursor && latestLedger !== undefined) {
+      observability.setIndexerLagLedgers(Math.max(0, latestLedger - Number(cursor.lastLedger)));
+    }
+    consoleLogger("info", "observability.snapshot", {
+      requestId: "metrics",
+      ...observability.snapshot(),
+    });
+  };
+  const metricsTimer = setInterval(() => {
+    void collectOperationalMetrics().catch((error: unknown) => {
+      consoleLogger("warn", "observability.collection_failed", {
+        requestId: "metrics",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, 60_000);
+  void collectOperationalMetrics();
 
-  const worker = createChargeWorker({ connection, prisma, gateway, logger: consoleLogger });
+  const worker = createChargeWorker({
+    connection,
+    prisma,
+    gateway,
+    logger: consoleLogger,
+    observability,
+    authorizationEncryptionKey: config.authorizationEncryptionKey,
+  });
   const stopScheduler = startScheduler(prisma, queue);
 
   const webhookQueue = createWebhookDeliveryQueue(connection);
@@ -61,6 +103,7 @@ async function main(): Promise<void> {
     // §12/§16's SSRF decision) — `allowInsecureWebhookHttp` intentionally
     // omitted here, defaulting to false.
     logger: consoleLogger,
+    observability,
   });
   const stopWebhookScheduler = startWebhookScheduler(prisma, webhookQueue);
 
@@ -68,8 +111,17 @@ async function main(): Promise<void> {
   // `getMandate`) as the `MandateReader` for the cold-start asset-backfill
   // case (mandate-index-sync.ts) rather than standing up a second RPC
   // client for the same read.
-  const eventsGateway = createSorobanChainEventsGateway({ rpcUrl: config.deployment.rpcUrl, contractId: config.deployment.contractId });
-  const stopIndexerScheduler = startIndexerScheduler({ prisma, events: eventsGateway, mandateReader: gateway, logger: consoleLogger });
+  const eventsGateway = createSorobanChainEventsGateway({
+    rpcUrl: config.deployment.rpcUrl,
+    contractId: config.deployment.contractId,
+  });
+  const stopIndexerScheduler = startIndexerScheduler({
+    prisma,
+    events: eventsGateway,
+    mandateReader: gateway,
+    logger: consoleLogger,
+    observability,
+  });
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
@@ -77,6 +129,10 @@ async function main(): Promise<void> {
         stopScheduler();
         stopWebhookScheduler();
         stopIndexerScheduler();
+        clearInterval(metricsTimer);
+        await new Promise<void>((resolve, reject) => {
+          metricsServer.close((error) => (error ? reject(error) : resolve()));
+        });
         await worker.close();
         await webhookWorker.close();
         await queue.close();

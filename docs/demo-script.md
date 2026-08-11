@@ -5,17 +5,27 @@ consumer wallet authorization and mandate creation, a scheduled charge executed 
 over-limit charge rejection, immediate revocation, and a subsequently rejected charge attempt —
 each step with the exact command or UI action to reproduce it on a clean machine.
 
-Status: Scenes 1, 2, 4 (viewing), and 5 are reproducible today via UI (Phase 8 merchant API,
-Phase 10 consumer checkout, Phase 11 consumer dashboard, Phase 12b merchant dashboard). Scene 1 can
-now be run entirely from `/merchant` (Phase 12b) instead of `curl`; Scene 4's rejection is now
-*viewable* on the merchant dashboard's **Failed** view with its human-readable reason, though
-*requesting* a charge (both scenes 3 and 4's trigger) is still a direct API/SDK call — PLAN.md
-§16.3's dashboard scope is Products/Checkout links/Mandates/Collections/Payments/Refunds/
-Developers/Webhooks, not a "request a charge" button (that belongs to the merchant's own backend
-integration via `@paymap/sdk`, per PLAN.md §17). The underlying charge/relayer/revocation
-mechanics both scenes narrate are already proven end-to-end on real testnet
-(`scripts/run-relayer-testnet-demo.ts`, `docs/architecture.md`'s Phase 9 section). Full polish pass
-is Phase 15.
+Status: complete in Phase 15. The UI supports merchant setup, wallet authorization, live mandate
+controls, and a unified transaction timeline. `pnpm demo:scenes` runs the exact real-testnet
+success → over-limit rejection → revocation → post-revocation rejection sequence through the
+actual contract and relayer pipeline.
+
+## Clean run
+
+```bash
+pnpm install --frozen-lockfile
+pnpm demo:setup
+pnpm start
+```
+
+In another shell:
+
+```bash
+pnpm demo:scenes
+```
+
+`demo:setup` creates the merchant, consumer, fixed plan, variable plan, and checkout links without
+printing any private key. See the root `README.md` for prerequisites and deployment ids.
 
 ---
 
@@ -83,7 +93,7 @@ Steps:
 1. Click **Connect your wallet** (Freighter/xBull via Stellar Wallets Kit).
 2. Click **Authorize automatic payment** — signs `create_mandate` (payer-signs-and-submits).
 3. The page immediately requests the bounded allowance signature — the exact amount (max exposure
-   + a disclosed 1% headroom, never unlimited) is shown before signing.
+   - a disclosed 1% headroom, never unlimited) is shown before signing.
 4. Confirmation screen: automatic payment ID, next eligible charge date, approved spending limit,
    and how to cancel.
 
@@ -93,10 +103,9 @@ mandate they can't find their way back to.
 
 ## Scene 3 — Successful collection
 
-*(Mechanics proven end-to-end on testnet in Phase 9 — `scripts/run-relayer-testnet-demo.ts`.
-Requesting the charge itself is a `POST /v1/mandates/:id/charges` call — via `@paymap/sdk` or curl,
-not a merchant dashboard button, per PLAN.md §16.3's scope. The result is viewable afterward on the
-dashboard's **Payments** view, Phase 12b.)*
+Run `pnpm demo:scenes`. The first scene schedules a real request and executes it through
+`processChargeRequest` against testnet. In the UI, the result appears on the merchant Payments view
+and the consumer's **Transaction timeline** with its transaction hash.
 
 The merchant requests a $14.50 charge; the relayer loads the mandate, simulates, submits (merchant
 authorizes, relayer only pays the fee and never gains spending authority), and the merchant
@@ -104,11 +113,9 @@ receives exactly $14.50 PUSD.
 
 ## Scene 4 — Policy protection
 
-*(Contract-level rejection proven by `contracts/mandate-registry`'s `AmountExceedsChargeLimit`/
-`AmountExceedsPeriodLimit` test suite. Requesting the charge is the same API/SDK call as Scene 3;
-the rejection is now viewable on the merchant dashboard's **Failed** view, Phase 12b — framed
-honestly as the mandate's own rules correctly blocking the charge, not a bug, with the machine
-code shown alongside for support.)*
+The second `pnpm demo:scenes` step submits twice the fixed limit through the same relayer pipeline.
+It must finish as `AmountExceedsChargeLimit`, with no token movement. The rejection appears in the
+merchant Failed view and consumer transaction timeline.
 
 The merchant attempts to charge $25 against the $20 mandate; the contract rejects it before any
 token transfer.
@@ -136,8 +143,8 @@ Steps:
    mandate is already safely cancelled either way.
 5. Back on **Paused & ended**, the mandate now shows "Cancelled" with no lifecycle controls left,
    just "View history".
-6. The merchant then attempts a later, otherwise-valid $10 charge against the same mandate id
-   (Phase 9's relayer pipeline, or a direct `charge` call) — rejected with `MandateRevoked` before
+6. The final `pnpm demo:scenes` step attempts a later, otherwise-valid charge against the same
+   mandate id — rejected with `MandateRevoked` before
    any token transfer, proven by the Phase 2/3 contract test suites. On the consumer's **Payment
    history** tab, this shows up not as a scary error but as a blocked attempt: "The merchant tried
    to charge after you cancelled this automatic payment, so we blocked it" — proof the protection

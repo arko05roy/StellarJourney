@@ -63,6 +63,13 @@ enum ApiKeyStatus {
   revoked
 }
 
+enum ChargeAuthorizationStatus {
+  pending
+  ready
+  consumed
+  expired
+}
+
 enum CheckoutSessionStatus {
   pending
   completed
@@ -113,15 +120,16 @@ model Merchant {
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
 
-  apiKeys           ApiKey[]
-  products          Product[]
-  checkoutSessions  CheckoutSession[]
-  mandateIndexes    MandateIndex[]
-  chargeRequests    ChargeRequest[]
-  payments          Payment[]
-  refundRequests    RefundRequest[]
-  webhookDeliveries WebhookDelivery[]
-  idempotencyKeys   IdempotencyKey[]
+  apiKeys              ApiKey[]
+  products             Product[]
+  checkoutSessions     CheckoutSession[]
+  mandateIndexes       MandateIndex[]
+  chargeAuthorizations ChargeAuthorization[]
+  chargeRequests       ChargeRequest[]
+  payments             Payment[]
+  refundRequests       RefundRequest[]
+  webhookDeliveries    WebhookDelivery[]
+  idempotencyKeys      IdempotencyKey[]
 }
 
 /// Hashed at rest via HMAC-SHA256 with `API_KEY_HASH_SECRET` as the pepper
@@ -133,9 +141,12 @@ model ApiKey {
   id         String       @id @default(uuid())
   merchantId String
   merchant   Merchant     @relation(fields: [merchantId], references: [id])
+  name       String       @default("Default")
+  scopes     String[]     @default(["products:read", "products:write", "checkout_sessions:read", "checkout_sessions:write", "mandates:read", "charges:read", "charges:write", "payments:read", "refunds:read", "refunds:write", "webhooks:read", "webhooks:write", "api_keys:manage"])
   keyPrefix  String
   keyHash    String       @unique
   status     ApiKeyStatus @default(active)
+  lastUsedAt DateTime?
   createdAt  DateTime     @default(now())
   revokedAt  DateTime?
 
@@ -212,18 +223,18 @@ model MandateIndex {
 }
 
 model ChargeRequest {
-  id              String              @id @default(uuid())
+  id              String               @id @default(uuid())
   merchantId      String
-  merchant        Merchant            @relation(fields: [merchantId], references: [id])
+  merchant        Merchant             @relation(fields: [merchantId], references: [id])
   mandateId       String
   /// Hex 32-byte id submitted on-chain as `charge_id` — the contract's own
   /// replay guard. Generated server-side at creation time.
-  chargeId        String              @unique
+  chargeId        String               @unique
   amount          String
   invoiceHash     String
   scheduledFor    DateTime
-  status          ChargeRequestStatus @default(scheduled)
-  attemptCount    Int                 @default(0)
+  status          ChargeRequestStatus  @default(scheduled)
+  attemptCount    Int                  @default(0)
   failureCode     String?
   transactionHash String?
   /// Phase 9 (relayer): when a `retryable_failed` attempt should be retried
@@ -232,8 +243,10 @@ model ChargeRequest {
   /// `permanently_failed` (schedule exhausted, or the failure was
   /// deterministic and never had a next attempt).
   nextAttemptAt   DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  authorizationId String?              @unique
+  authorization   ChargeAuthorization? @relation(fields: [authorizationId], references: [id])
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
 
   payment Payment?
 
@@ -243,17 +256,47 @@ model ChargeRequest {
   @@index([nextAttemptAt])
 }
 
+/// One merchant-signed, invocation-bound Soroban authorization entry. The
+/// merchant signs off-platform; only authenticated ciphertext reaches storage.
+/// It is bound one-to-one to a ChargeRequest and cannot authorize any other
+/// mandate, amount, invoice, contract, or network.
+model ChargeAuthorization {
+  id                        String                    @id @default(uuid())
+  merchantId                String
+  merchant                  Merchant                  @relation(fields: [merchantId], references: [id])
+  mandateId                 String
+  chargeId                  String                    @unique
+  amount                    String
+  invoiceHash               String
+  scheduledFor              DateTime
+  networkPassphrase         String
+  contractId                String
+  unsignedEntryXdr          String
+  signedEntryCiphertext     String?
+  signatureExpirationLedger BigInt
+  status                    ChargeAuthorizationStatus @default(pending)
+  consumedAt                DateTime?
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+
+  chargeRequest ChargeRequest?
+
+  @@index([merchantId])
+  @@index([mandateId])
+  @@index([status])
+}
+
 /// Written only from a confirmed on-chain result (Phase 9's relayer) —
 /// never from this API's own optimism (CLAUDE.md §1/§2). Phase 8 never
 /// inserts rows here except in tests that need a fixture payment to exist
 /// in order to exercise the refund endpoint ahead of Phase 9 landing.
 model Payment {
-  paymentId       String   @id
+  paymentId       String         @id
   merchantId      String
-  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  merchant        Merchant       @relation(fields: [merchantId], references: [id])
   mandateId       String
-  chargeId        String   @unique
-  chargeRequestId String?  @unique
+  chargeId        String         @unique
+  chargeRequestId String?        @unique
   chargeRequest   ChargeRequest? @relation(fields: [chargeRequestId], references: [id])
   amount          String
   assetAddress    String
@@ -262,8 +305,8 @@ model Payment {
   /// Cumulative confirmed-refunded base units against this payment. Updated
   /// only once a refund actually confirms on-chain (future phase) — never
   /// optimistically from `RefundRequest` creation.
-  refundedTotal   String   @default("0")
-  createdAt       DateTime @default(now())
+  refundedTotal   String         @default("0")
+  createdAt       DateTime       @default(now())
 
   refundRequests RefundRequest[]
 

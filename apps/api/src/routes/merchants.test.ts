@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildTestApp, cleanDatabase, randomStellarAccountAddress, type TestApp } from "../test/helpers.js";
+import {
+  buildTestApp,
+  cleanDatabase,
+  randomStellarAccountAddress,
+  type TestApp,
+} from "../test/helpers.js";
 
 describe("POST /v1/merchants", () => {
   let testApp: TestApp;
@@ -72,7 +77,10 @@ describe("POST /v1/merchants/me/api-keys/rotate", () => {
   });
 
   it("requires authentication", async () => {
-    const response = await testApp.app.inject({ method: "POST", url: "/v1/merchants/me/api-keys/rotate" });
+    const response = await testApp.app.inject({
+      method: "POST",
+      url: "/v1/merchants/me/api-keys/rotate",
+    });
     expect(response.statusCode).toBe(401);
     expect(response.json().code).toBe("MISSING_API_KEY");
   });
@@ -111,5 +119,104 @@ describe("POST /v1/merchants/me/api-keys/rotate", () => {
     });
     // 404 (no such product) proves auth succeeded, not 401.
     expect(withNewKey.statusCode).toBe(404);
+  });
+});
+
+describe("scoped API keys", () => {
+  let testApp: TestApp;
+
+  beforeEach(async () => {
+    testApp = buildTestApp();
+    await cleanDatabase(testApp.prisma);
+  });
+
+  afterEach(async () => {
+    await testApp.app.close();
+    await testApp.prisma.$disconnect();
+  });
+
+  it("enforces least privilege and prevents scope escalation", async () => {
+    const created = await testApp.app.inject({
+      method: "POST",
+      url: "/v1/merchants",
+      payload: { name: "Scoped Inc", walletAddress: randomStellarAccountAddress() },
+    });
+    const { apiKey: adminKey } = created.json() as { apiKey: string };
+
+    const issued = await testApp.app.inject({
+      method: "POST",
+      url: "/v1/merchants/me/api-keys",
+      headers: { authorization: `Bearer ${adminKey}` },
+      payload: { name: "Catalog reader", scopes: ["products:read"] },
+    });
+    expect(issued.statusCode).toBe(201);
+    const { apiKey: readKey } = issued.json() as { apiKey: string };
+
+    const allowed = await testApp.app.inject({
+      method: "GET",
+      url: "/v1/products",
+      headers: { authorization: `Bearer ${readKey}` },
+    });
+    expect(allowed.statusCode).toBe(200);
+
+    const denied = await testApp.app.inject({
+      method: "POST",
+      url: "/v1/products",
+      headers: { authorization: `Bearer ${readKey}` },
+      payload: {},
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().code).toBe("INSUFFICIENT_SCOPE");
+
+    const escalation = await testApp.app.inject({
+      method: "POST",
+      url: "/v1/merchants/me/api-keys",
+      headers: { authorization: `Bearer ${readKey}` },
+      payload: { name: "Admin", scopes: ["api_keys:manage"] },
+    });
+    expect(escalation.statusCode).toBe(403);
+    expect(escalation.json().code).toBe("INSUFFICIENT_SCOPE");
+  });
+
+  it("lists and revokes another key but refuses self-revocation", async () => {
+    const created = await testApp.app.inject({
+      method: "POST",
+      url: "/v1/merchants",
+      payload: { name: "Scoped Inc", walletAddress: randomStellarAccountAddress() },
+    });
+    const { apiKey: adminKey, apiKeyId: adminKeyId } = created.json() as {
+      apiKey: string;
+      apiKeyId: string;
+    };
+    const issued = await testApp.app.inject({
+      method: "POST",
+      url: "/v1/merchants/me/api-keys",
+      headers: { authorization: `Bearer ${adminKey}` },
+      payload: { name: "Reader", scopes: ["products:read"] },
+    });
+    const { apiKeyId: readerKeyId } = issued.json() as { apiKeyId: string };
+
+    const listed = await testApp.app.inject({
+      method: "GET",
+      url: "/v1/merchants/me/api-keys",
+      headers: { authorization: `Bearer ${adminKey}` },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect((listed.json() as { data: unknown[] }).data).toHaveLength(2);
+
+    const self = await testApp.app.inject({
+      method: "DELETE",
+      url: `/v1/merchants/me/api-keys/${adminKeyId}`,
+      headers: { authorization: `Bearer ${adminKey}` },
+    });
+    expect(self.statusCode).toBe(409);
+    expect(self.json().code).toBe("CANNOT_REVOKE_CURRENT_API_KEY");
+
+    const revoked = await testApp.app.inject({
+      method: "DELETE",
+      url: `/v1/merchants/me/api-keys/${readerKeyId}`,
+      headers: { authorization: `Bearer ${adminKey}` },
+    });
+    expect(revoked.statusCode).toBe(204);
   });
 });

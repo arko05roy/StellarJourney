@@ -12,7 +12,39 @@ import type { Queue } from "bullmq";
 import type { PrismaClient } from "./db.js";
 import { enqueueChargeRequest, type ChargeJobData } from "./queue.js";
 
-export async function scheduleDueChargeRequests(prisma: PrismaClient, queue: Queue<ChargeJobData>, now: Date): Promise<number> {
+export const STALE_PRE_SUBMISSION_MS = 10 * 60_000;
+
+/**
+ * A process may stop after claiming a row but before submission. Those two
+ * states are safe to retry: no envelope has been broadcast yet. `submitted`
+ * is deliberately excluded because its ledger outcome must be reconciled,
+ * never guessed.
+ */
+export async function recoverStalePreSubmissionCharges(
+  prisma: PrismaClient,
+  now: Date,
+  staleAfterMs = STALE_PRE_SUBMISSION_MS,
+): Promise<number> {
+  const result = await prisma.chargeRequest.updateMany({
+    where: {
+      status: { in: ["processing", "simulated"] },
+      updatedAt: { lte: new Date(now.getTime() - staleAfterMs) },
+    },
+    data: {
+      status: "retryable_failed",
+      failureCode: "WORKER_INTERRUPTED",
+      nextAttemptAt: now,
+    },
+  });
+  return result.count;
+}
+
+export async function scheduleDueChargeRequests(
+  prisma: PrismaClient,
+  queue: Queue<ChargeJobData>,
+  now: Date,
+): Promise<number> {
+  await recoverStalePreSubmissionCharges(prisma, now);
   const due = await prisma.chargeRequest.findMany({
     where: {
       OR: [
@@ -29,7 +61,11 @@ export async function scheduleDueChargeRequests(prisma: PrismaClient, queue: Que
 }
 
 /** Starts a `setInterval`-driven scheduler loop; returns a function that stops it. */
-export function startScheduler(prisma: PrismaClient, queue: Queue<ChargeJobData>, intervalMs = 30_000): () => void {
+export function startScheduler(
+  prisma: PrismaClient,
+  queue: Queue<ChargeJobData>,
+  intervalMs = 30_000,
+): () => void {
   const tick = (): void => {
     scheduleDueChargeRequests(prisma, queue, new Date()).catch((error: unknown) => {
       console.error("[relayer.scheduler] failed to schedule due charge requests:", error);

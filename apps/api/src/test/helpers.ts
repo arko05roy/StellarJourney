@@ -4,7 +4,7 @@
  * works" standard), a fake `MandateReader` (no real Soroban RPC in tests —
  * see `chain/mandate-reader.ts`'s module doc), and fixture builders.
  */
-import { Keypair, StrKey } from "@stellar/stellar-sdk";
+import { Keypair, Networks, StrKey } from "@stellar/stellar-sdk";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import type { HostResolver } from "@paymap/shared";
@@ -16,6 +16,9 @@ import { MandateReadError, type MandateReader } from "../chain/mandate-reader.js
 
 export const TEST_HASH_SECRET = "test-hash-secret-pepper";
 export const TEST_WEBHOOK_ENCRYPTION_KEY = "test-webhook-encryption-key-material";
+export const TEST_AUTHORIZATION_ENCRYPTION_KEY = "test-authorization-encryption-key-material";
+export const TEST_AUTHORIZATION_CONTRACT_ID = randomStellarContractAddress();
+export const TEST_LATEST_LEDGER = 1_000_000;
 
 /**
  * Test double for the SSRF guard's DNS step (`@paymap/shared`'s
@@ -25,7 +28,9 @@ export const TEST_WEBHOOK_ENCRYPTION_KEY = "test-webhook-encryption-key-material
  * real addresses. The guard's own DNS-resolution and IP-range logic has
  * dedicated unit coverage in `packages/shared/src/webhook-url-guard.test.ts`.
  */
-export const fakePublicHostResolver: HostResolver = async () => [{ address: "93.184.216.34", family: 4 }];
+export const fakePublicHostResolver: HostResolver = async () => [
+  { address: "93.184.216.34", family: 4 },
+];
 
 export function createTestPrisma(): PrismaClient {
   return createPrismaClient();
@@ -38,6 +43,7 @@ export async function cleanDatabase(prisma: PrismaClient): Promise<void> {
   await prisma.refundRequest.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.chargeRequest.deleteMany();
+  await prisma.chargeAuthorization.deleteMany();
   await prisma.mandateIndex.deleteMany();
   await prisma.checkoutSession.deleteMany();
   await prisma.product.deleteMany();
@@ -79,6 +85,10 @@ export class FakeMandateReader implements MandateReader {
 
   async getRefundedTotal(paymentId: string): Promise<bigint> {
     return this.refundedTotals.get(paymentId) ?? 0n;
+  }
+
+  async getLatestLedgerSequence(): Promise<number> {
+    return TEST_LATEST_LEDGER;
   }
 }
 
@@ -137,6 +147,11 @@ export function buildTestApp(): TestApp {
     mandateReader,
     hashSecret: TEST_HASH_SECRET,
     webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
+    authorizationEncryptionKey: TEST_AUTHORIZATION_ENCRYPTION_KEY,
+    chargeAuthorization: {
+      contractId: TEST_AUTHORIZATION_CONTRACT_ID,
+      networkPassphrase: Networks.TESTNET,
+    },
     resolveWebhookHost: fakePublicHostResolver,
     now: () => state.now,
   });
@@ -158,14 +173,25 @@ export interface TestMerchant {
   walletAddress: string;
   apiKey: string;
   apiKeyId: string;
+  signer?: Keypair;
 }
 
-export async function createTestMerchant(prisma: PrismaClient, overrides: { name?: string; walletAddress?: string } = {}): Promise<TestMerchant> {
+export async function createTestMerchant(
+  prisma: PrismaClient,
+  overrides: { name?: string; walletAddress?: string } = {},
+): Promise<TestMerchant> {
+  const signer = Keypair.random();
   const { merchant, apiKey, rawApiKey } = await createMerchantWithApiKey(prisma, TEST_HASH_SECRET, {
     name: overrides.name ?? "Test Merchant",
-    walletAddress: overrides.walletAddress ?? randomStellarAccountAddress(),
+    walletAddress: overrides.walletAddress ?? signer.publicKey(),
   });
-  return { merchantId: merchant.id, walletAddress: merchant.walletAddress, apiKey: rawApiKey, apiKeyId: apiKey.id };
+  return {
+    merchantId: merchant.id,
+    walletAddress: merchant.walletAddress,
+    apiKey: rawApiKey,
+    apiKeyId: apiKey.id,
+    ...(overrides.walletAddress ? {} : { signer }),
+  };
 }
 
 export function authHeader(apiKey: string): { authorization: string } {

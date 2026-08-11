@@ -1,0 +1,22 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{job="paymap-api"}'
+        values: "0 0 0 0 1 1"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: PaymapServiceDown
+        exp_alerts:
+          - exp_labels:
+              job: paymap-api
+              severity: critical
+            exp_annotations:
+              summary: "paymap-api is unreachable"
+      - eval_time: 5m
+        alertname: PaymapServiceDown
+        exp_alerts: []

@@ -1,0 +1,47 @@
+{
+  "annotations": { "list": [] },
+  "editable": false,
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "API request rate",
+      "targets": [{ "expr": "sum(rate(paymap_api_requests_total[5m])) by (status_class)" }],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Charge outcomes",
+      "targets": [{ "expr": "sum(rate(paymap_charge_attempts_total[5m])) by (outcome, reason)" }],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "type": "stat",
+      "title": "Queue depth",
+      "targets": [{ "expr": "paymap_charge_queue_depth" }],
+      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 8 }
+    },
+    {
+      "type": "stat",
+      "title": "Indexer lag",
+      "targets": [{ "expr": "paymap_indexer_lag_ledgers" }],
+      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 8 }
+    },
+    {
+      "type": "timeseries",
+      "title": "RPC p95 latency",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(paymap_rpc_request_seconds_bucket[5m])) by (le))"
+        }
+      ],
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 8 }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["paymap", "staging"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "title": "Paymap staging overview",
+  "uid": "paymap-staging-overview",
+  "version": 1
+}

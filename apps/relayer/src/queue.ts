@@ -23,10 +23,20 @@ export function createChargeQueue(connection: ConnectionOptions): Queue<ChargeJo
 }
 
 /** Enqueues (or no-ops if already enqueued — same deterministic id) one `ChargeRequest` for processing. */
-export async function enqueueChargeRequest(queue: Queue<ChargeJobData>, chargeRequestId: string): Promise<void> {
+export async function enqueueChargeRequest(
+  queue: Queue<ChargeJobData>,
+  chargeRequestId: string,
+): Promise<void> {
   await queue.add(
     "charge",
     { chargeRequestId },
-    { jobId: chargeRequestId, removeOnComplete: { count: 1000 }, removeOnFail: { count: 1000 } },
+    {
+      jobId: chargeRequestId,
+      // Keep the deterministic ID only while queued/active. A completed
+      // attempt must be removable so the DB-driven retry scheduler can
+      // enqueue the same ChargeRequest again later.
+      removeOnComplete: true,
+      removeOnFail: true,
+    },
   );
 }

@@ -1,0 +1,11 @@
+route:
+  receiver: email-later
+  group_by: [alertname]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  # Intentionally empty until the operator supplies SMTP credentials and a
+  # destination address in Render. Alerts still remain visible in Alertmanager.
+  - name: email-later

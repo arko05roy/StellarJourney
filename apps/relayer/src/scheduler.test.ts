@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { scheduleDueChargeRequests } from "./scheduler.js";
 import { createChargeQueue, createRedisConnection } from "./queue.js";
-import { cleanDatabase, createChargeRequest, createMerchantWithMandateContext, createTestPrisma } from "./test/helpers.js";
+import {
+  cleanDatabase,
+  createChargeRequest,
+  createMerchantWithMandateContext,
+  createTestPrisma,
+} from "./test/helpers.js";
 import type { PrismaClient } from "./db.js";
 import type { Queue } from "bullmq";
 import type IORedis from "ioredis";
@@ -30,8 +35,12 @@ describe("scheduleDueChargeRequests (real Postgres + real Redis)", () => {
 
   it("enqueues due `scheduled` rows and skips future-scheduled ones", async () => {
     const fixture = await createMerchantWithMandateContext(prisma);
-    const due = await createChargeRequest(prisma, fixture, { scheduledFor: new Date(NOW.getTime() - 1000) });
-    const future = await createChargeRequest(prisma, fixture, { scheduledFor: new Date(NOW.getTime() + 3_600_000) });
+    const due = await createChargeRequest(prisma, fixture, {
+      scheduledFor: new Date(NOW.getTime() - 1000),
+    });
+    const future = await createChargeRequest(prisma, fixture, {
+      scheduledFor: new Date(NOW.getTime() + 3_600_000),
+    });
 
     const count = await scheduleDueChargeRequests(prisma, queue, NOW);
 
@@ -62,7 +71,9 @@ describe("scheduleDueChargeRequests (real Postgres + real Redis)", () => {
 
   it("uses the deterministic job id (chargeRequest.id) — re-scheduling the same due row does not create a second job", async () => {
     const fixture = await createMerchantWithMandateContext(prisma);
-    const due = await createChargeRequest(prisma, fixture, { scheduledFor: new Date(NOW.getTime() - 1000) });
+    const due = await createChargeRequest(prisma, fixture, {
+      scheduledFor: new Date(NOW.getTime() - 1000),
+    });
 
     await scheduleDueChargeRequests(prisma, queue, NOW);
     await scheduleDueChargeRequests(prisma, queue, NOW);
@@ -71,5 +82,30 @@ describe("scheduleDueChargeRequests (real Postgres + real Redis)", () => {
     const total = Object.values(counts).reduce((a, b) => a + b, 0);
     expect(total).toBe(1);
     expect((await queue.getJob(due.id))?.id).toBe(due.id);
+    expect((await queue.getJob(due.id))?.opts.removeOnComplete).toBe(true);
+  });
+
+  it("recovers stale pre-submission work after a relayer interruption", async () => {
+    const fixture = await createMerchantWithMandateContext(prisma);
+    const stale = await createChargeRequest(prisma, fixture);
+    await prisma.chargeRequest.update({
+      where: { id: stale.id },
+      data: {
+        status: "processing",
+        updatedAt: new Date(NOW.getTime() - 11 * 60_000),
+      },
+    });
+
+    const count = await scheduleDueChargeRequests(prisma, queue, NOW);
+
+    expect(count).toBe(1);
+    expect(await queue.getJob(stale.id)).toBeDefined();
+    expect(await prisma.chargeRequest.findUniqueOrThrow({ where: { id: stale.id } })).toMatchObject(
+      {
+        status: "retryable_failed",
+        failureCode: "WORKER_INTERRUPTED",
+        nextAttemptAt: NOW,
+      },
+    );
   });
 });

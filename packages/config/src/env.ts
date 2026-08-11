@@ -14,10 +14,22 @@ const envSchema = z.object({
   MANDATE_CONTRACT_ID: z.string().min(1, "MANDATE_CONTRACT_ID is required"),
   RELAYER_SECRET_KEY: z.string().min(1, "RELAYER_SECRET_KEY is required"),
   WEBHOOK_ENCRYPTION_KEY: z.string().min(1, "WEBHOOK_ENCRYPTION_KEY is required"),
+  AUTHORIZATION_ENCRYPTION_KEY: z.string().min(1, "AUTHORIZATION_ENCRYPTION_KEY is required"),
   API_KEY_HASH_SECRET: z.string().min(1, "API_KEY_HASH_SECRET is required"),
 });
 
+const apiEnvSchema = envSchema.omit({
+  REDIS_URL: true,
+  RELAYER_SECRET_KEY: true,
+});
+
+const relayerEnvSchema = envSchema.omit({
+  API_KEY_HASH_SECRET: true,
+});
+
 export type Env = z.infer<typeof envSchema>;
+export type ApiEnv = z.infer<typeof apiEnvSchema>;
+export type RelayerEnv = z.infer<typeof relayerEnvSchema>;
 
 /** Thrown by loadEnv()/getEnv() when required configuration is missing or invalid. */
 export class EnvValidationError extends Error {
@@ -35,10 +47,30 @@ export class EnvValidationError extends Error {
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const result = envSchema.safeParse(source);
   if (!result.success) {
-    const issues = result.error.issues.map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`);
+    const issues = result.error.issues.map(
+      (issue) => `  - ${issue.path.join(".")}: ${issue.message}`,
+    );
     throw new EnvValidationError(issues);
   }
   return result.data;
+}
+
+function parseSchema<T>(schema: z.ZodType<T>, source: NodeJS.ProcessEnv): T {
+  const result = schema.safeParse(source);
+  if (!result.success) {
+    throw new EnvValidationError(
+      result.error.issues.map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`),
+    );
+  }
+  return result.data;
+}
+
+export function loadApiEnv(source: NodeJS.ProcessEnv = process.env): ApiEnv {
+  return parseSchema(apiEnvSchema, source);
+}
+
+export function loadRelayerEnv(source: NodeJS.ProcessEnv = process.env): RelayerEnv {
+  return parseSchema(relayerEnvSchema, source);
 }
 
 let cachedEnv: Env | undefined;
@@ -56,7 +88,22 @@ export function getEnv(): Env {
   return cachedEnv;
 }
 
+let cachedApiEnv: ApiEnv | undefined;
+let cachedRelayerEnv: RelayerEnv | undefined;
+
+export function getApiEnv(): ApiEnv {
+  cachedApiEnv ??= loadApiEnv();
+  return cachedApiEnv;
+}
+
+export function getRelayerEnv(): RelayerEnv {
+  cachedRelayerEnv ??= loadRelayerEnv();
+  return cachedRelayerEnv;
+}
+
 /** Test-only escape hatch: clears the memoized env so the next getEnv() re-parses. */
 export function resetEnvCache(): void {
   cachedEnv = undefined;
+  cachedApiEnv = undefined;
+  cachedRelayerEnv = undefined;
 }

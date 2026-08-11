@@ -27,7 +27,10 @@ describe("processChargeRequest", () => {
     await cleanDatabase(prisma);
     gateway = new FakeChainGateway();
     fixture = await createMerchantWithMandateContext(prisma);
-    gateway.setMandate(fixture.mandateId, buildMandate({ merchant: fixture.merchantWalletAddress, asset: fixture.assetAddress }));
+    gateway.setMandate(
+      fixture.mandateId,
+      buildMandate({ merchant: fixture.merchantWalletAddress, asset: fixture.assetAddress }),
+    );
   });
 
   afterEach(async () => {
@@ -39,7 +42,9 @@ describe("processChargeRequest", () => {
   }
 
   it("succeeds end-to-end: writes exactly one Payment row (from the confirmed receipt, not optimism) and transitions to succeeded", async () => {
-    const { id, chargeId, invoiceHash } = await createChargeRequest(prisma, fixture, { amount: 5_000_000n });
+    const { id, chargeId, invoiceHash } = await createChargeRequest(prisma, fixture, {
+      amount: 5_000_000n,
+    });
     const receipt = buildPaymentReceipt({
       mandateId: fixture.mandateId,
       chargeId,
@@ -49,11 +54,20 @@ describe("processChargeRequest", () => {
       amount: 5_000_000n,
     });
     gateway.prepareResult = () => ({ ok: true, receipt });
-    gateway.submitResult = () => ({ kind: "success", receipt, txHash: "real-tx-hash-1", ledger: 12345n });
+    gateway.submitResult = () => ({
+      kind: "success",
+      receipt,
+      txHash: "real-tx-hash-1",
+      ledger: 12345n,
+    });
 
     const outcome = await processChargeRequest(deps(), id);
 
-    expect(outcome).toEqual({ kind: "succeeded", paymentId: receipt.paymentId, txHash: "real-tx-hash-1" });
+    expect(outcome).toEqual({
+      kind: "succeeded",
+      paymentId: receipt.paymentId,
+      txHash: "real-tx-hash-1",
+    });
 
     const row = await prisma.chargeRequest.findUniqueOrThrow({ where: { id } });
     expect(row.status).toBe("succeeded");
@@ -65,7 +79,9 @@ describe("processChargeRequest", () => {
     expect(payments[0]?.transactionHash).toBe("real-tx-hash-1");
     expect(payments[0]?.ledger.toString()).toBe("12345");
 
-    const webhooks = await prisma.webhookDelivery.findMany({ where: { merchantId: fixture.merchantId } });
+    const webhooks = await prisma.webhookDelivery.findMany({
+      where: { merchantId: fixture.merchantId },
+    });
     expect(webhooks).toHaveLength(1);
     expect(webhooks[0]?.eventType).toBe("payment.succeeded");
     expect(webhooks[0]?.status).toBe("pending");
@@ -87,14 +103,19 @@ describe("processChargeRequest", () => {
     const payments = await prisma.payment.findMany({ where: { mandateId: fixture.mandateId } });
     expect(payments).toHaveLength(0);
 
-    const webhooks = await prisma.webhookDelivery.findMany({ where: { merchantId: fixture.merchantId } });
+    const webhooks = await prisma.webhookDelivery.findMany({
+      where: { merchantId: fixture.merchantId },
+    });
     expect(webhooks).toHaveLength(1);
     expect(webhooks[0]?.eventType).toBe("payment.failed");
   });
 
   it("a transient contract error at simulation (InsufficientAllowance) schedules a retry at +6h and writes no Payment row", async () => {
     const { id } = await createChargeRequest(prisma, fixture);
-    gateway.prepareResult = () => ({ ok: false, error: decodeMandateErrorName("InsufficientAllowance") });
+    gateway.prepareResult = () => ({
+      ok: false,
+      error: decodeMandateErrorName("InsufficientAllowance"),
+    });
 
     const outcome = await processChargeRequest(deps(NOW), id);
 
@@ -121,17 +142,85 @@ describe("processChargeRequest", () => {
       amount: 1_000_000n,
     });
     gateway.prepareResult = () => ({ ok: true, receipt });
-    gateway.submitResult = () => ({ kind: "infra_error", failure: { failureClass: "transient", reason: "RPC_UNAVAILABLE" }, message: "network unreachable" });
+    gateway.submitResult = () => ({
+      kind: "infra_error",
+      failure: { failureClass: "transient", reason: "RPC_UNAVAILABLE" },
+      message: "network unreachable",
+    });
 
     const outcome = await processChargeRequest(deps(NOW), id);
 
-    expect(outcome).toEqual({ kind: "retry_scheduled", nextAttemptAt: new Date(NOW.getTime() + 6 * HOUR), reason: "RPC_UNAVAILABLE" });
+    expect(outcome).toEqual({
+      kind: "retry_scheduled",
+      nextAttemptAt: new Date(NOW.getTime() + 6 * HOUR),
+      reason: "RPC_UNAVAILABLE",
+    });
     expect(await prisma.payment.count()).toBe(0);
   });
 
+  it("an RPC failure during simulation schedules a retry instead of stranding processing", async () => {
+    const { id } = await createChargeRequest(prisma, fixture);
+    gateway.prepareResult = () => {
+      throw new Error("RPC 503");
+    };
+
+    const outcome = await processChargeRequest(deps(NOW), id);
+
+    expect(outcome).toEqual({
+      kind: "retry_scheduled",
+      nextAttemptAt: new Date(NOW.getTime() + 6 * HOUR),
+      reason: "RPC_UNAVAILABLE",
+    });
+    expect((await prisma.chargeRequest.findUniqueOrThrow({ where: { id } })).status).toBe(
+      "retryable_failed",
+    );
+  });
+
+  it("fails closed on an unreadable stored merchant authorization", async () => {
+    const { id, chargeId, invoiceHash } = await createChargeRequest(prisma, fixture);
+    const authorization = await prisma.chargeAuthorization.create({
+      data: {
+        merchantId: fixture.merchantId,
+        mandateId: fixture.mandateId,
+        chargeId,
+        amount: "1000000",
+        invoiceHash,
+        scheduledFor: NOW,
+        networkPassphrase: "Test SDF Network ; September 2015",
+        contractId: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4",
+        unsignedEntryXdr: "unsigned",
+        signedEntryCiphertext: "corrupted",
+        signatureExpirationLedger: 999999n,
+        status: "ready",
+      },
+    });
+    await prisma.chargeRequest.update({
+      where: { id },
+      data: { authorizationId: authorization.id },
+    });
+
+    const outcome = await processChargeRequest(
+      { ...deps(NOW), authorizationEncryptionKey: "test-key" },
+      id,
+    );
+
+    expect(outcome).toEqual({
+      kind: "permanently_failed",
+      reason: "MERCHANT_AUTHORIZATION_INVALID",
+    });
+    expect(gateway.chargeCallLog).toHaveLength(0);
+  });
+
   it("retry schedule exhausted (4th attempt) permanently fails instead of scheduling a 5th attempt", async () => {
-    const { id } = await createChargeRequest(prisma, fixture, { status: "retryable_failed", attemptCount: 3, nextAttemptAt: NOW });
-    gateway.prepareResult = () => ({ ok: false, error: decodeMandateErrorName("InsufficientBalance") });
+    const { id } = await createChargeRequest(prisma, fixture, {
+      status: "retryable_failed",
+      attemptCount: 3,
+      nextAttemptAt: NOW,
+    });
+    gateway.prepareResult = () => ({
+      ok: false,
+      error: decodeMandateErrorName("InsufficientBalance"),
+    });
 
     const outcome = await processChargeRequest(deps(NOW), id);
 
@@ -201,7 +290,9 @@ describe("processChargeRequest", () => {
     });
 
     it("a simulated receipt with an ALTERED amount (more than the ChargeRequest asked for) is rejected before submit() is ever called", async () => {
-      const { id, chargeId, invoiceHash } = await createChargeRequest(prisma, fixture, { amount: 1_000_000n });
+      const { id, chargeId, invoiceHash } = await createChargeRequest(prisma, fixture, {
+        amount: 1_000_000n,
+      });
       const alteredAmountReceipt = buildPaymentReceipt({
         mandateId: fixture.mandateId,
         chargeId,
@@ -258,7 +349,11 @@ describe("processChargeRequest", () => {
     // contract for real and the mandate was revoked in the meantime — the
     // contract itself returns a typed Err at that point, with a real tx hash
     // (the transaction genuinely reached the ledger).
-    gateway.submitResult = () => ({ kind: "contract_error", error: decodeMandateErrorName("MandateRevoked"), txHash: "stale-sim-tx-hash" });
+    gateway.submitResult = () => ({
+      kind: "contract_error",
+      error: decodeMandateErrorName("MandateRevoked"),
+      txHash: "stale-sim-tx-hash",
+    });
 
     const outcome = await processChargeRequest(deps(), id);
 
@@ -272,7 +367,9 @@ describe("processChargeRequest", () => {
 
   describe("duplicate job delivery — at most one successful charge", () => {
     it("two concurrent processChargeRequest calls for the SAME ChargeRequest produce exactly one succeeded outcome, one Payment row, and one on-chain submit() call", async () => {
-      const { id, chargeId, invoiceHash } = await createChargeRequest(prisma, fixture, { amount: 2_500_000n });
+      const { id, chargeId, invoiceHash } = await createChargeRequest(prisma, fixture, {
+        amount: 2_500_000n,
+      });
       const receipt = buildPaymentReceipt({
         mandateId: fixture.mandateId,
         chargeId,
@@ -287,7 +384,12 @@ describe("processChargeRequest", () => {
       // only the chain gateway (to count real chain-submission calls).
       const prismaWorkerA = createTestPrisma();
       const prismaWorkerB = createTestPrisma();
-      gateway.submitResult = () => ({ kind: "success", receipt, txHash: "dup-delivery-tx-hash", ledger: 42n });
+      gateway.submitResult = () => ({
+        kind: "success",
+        receipt,
+        txHash: "dup-delivery-tx-hash",
+        ledger: 42n,
+      });
 
       try {
         const [outcomeA, outcomeB] = await Promise.all([
@@ -329,7 +431,10 @@ describe("processChargeRequest", () => {
 
   it("a mandate whose on-chain merchant differs from this merchant's own records is rejected as a mismatch, never charged", async () => {
     const otherFixture = await createMerchantWithMandateContext(prisma);
-    gateway.setMandate(otherFixture.mandateId, buildMandate({ merchant: randomHexId32(), asset: otherFixture.assetAddress }));
+    gateway.setMandate(
+      otherFixture.mandateId,
+      buildMandate({ merchant: randomHexId32(), asset: otherFixture.assetAddress }),
+    );
     const { id } = await createChargeRequest(prisma, otherFixture);
 
     const outcome = await processChargeRequest(deps(), id);
