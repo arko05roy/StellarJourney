@@ -1,5 +1,16 @@
 # Operations
 
+## Free demo deployment
+
+Use `render.free.yaml` for a no-card demo backend. It runs the API and relayer
+in one free web service so both wake together after idle spin-down. Deploy the
+frontend separately on Vercel with
+`NEXT_PUBLIC_API_URL=https://paymap-demo-api.onrender.com`.
+
+This topology is for demos only: Render free web services sleep after idle,
+free Key Value is non-persistent, and free Postgres expires after 30 days
+without backups. Use `render.yaml` for production-like staging.
+
 ## Staging
 
 Render Blueprint: `render.yaml`. Render supplies HTTPS `*.onrender.com` hostnames; custom domains
