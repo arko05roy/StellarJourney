@@ -1,8 +1,40 @@
 /**
  * Merchant REST API entrypoint (products, checkout sessions, charge
- * requests, webhooks). Populated starting Phase 8. Placeholder only in
- * Phase 0 — exists so the workspace builds and typechecks.
+ * requests, refunds, webhooks — Phase 8). Wires the real Prisma client and
+ * a real on-chain `MandateReader` (backed by `@paymap/contract-client` and
+ * the committed testnet deployment registry) into `buildApp`.
  */
-export function placeholder(): string {
-  return "@paymap/api";
+import { getEnv } from "@paymap/config";
+import { loadDeployment } from "@paymap/contract-client";
+import { buildApp } from "./app.js";
+import { createPrismaClient } from "./db.js";
+import { createChainMandateReader } from "./chain/mandate-reader.js";
+
+async function main(): Promise<void> {
+  const env = getEnv();
+  const prisma = createPrismaClient();
+  const deployment = loadDeployment(env.STELLAR_NETWORK);
+  const mandateReader = createChainMandateReader(deployment);
+
+  const app = buildApp({
+    prisma,
+    mandateReader,
+    hashSecret: env.API_KEY_HASH_SECRET,
+    logger: true,
+  });
+
+  const port = Number(process.env["PORT"] ?? 3001);
+  await app.listen({ port, host: "0.0.0.0" });
+
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      void (async () => {
+        await app.close();
+        await prisma.$disconnect();
+        process.exit(0);
+      })();
+    });
+  }
 }
+
+void main();

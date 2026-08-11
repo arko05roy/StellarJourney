@@ -1,13 +1,318 @@
-// Phase 0: datasource + generator only. Models (User, Merchant, Product,
-// CheckoutSession, MandateIndex, ChargeRequest, Payment, WebhookDelivery,
-// IdempotencyKey — PLAN.md §13) are added in Phase 8. The database is never
-// the final source of truth for mandate/charge state — see CLAUDE.md §1.
+// Phase 8 — Merchant API data model (PLAN.md §13, CLAUDE.md §5/§17).
+//
+// The database is an indexed mirror plus merchant workflow state — it is
+// NEVER the final source of truth for on-chain mandate/payment state
+// (CLAUDE.md §1/§2). `MandateIndex` is a best-effort cache refreshed on
+// every authenticated read; every mandate-affecting decision (charge
+// precheck, refund cap) re-reads the chain via `packages/contract-client`
+// before acting.
+//
+// Money columns: every on-chain-denominated amount is stored as a `String`
+// holding the decimal integer base-unit representation (never `Decimal`,
+// `Int`, or `Float` — CLAUDE.md §5/§9: i128 on-chain values can exceed
+// `Float`/`Int` range and floats can silently lose precision). Conversion
+// to/from human decimal strings happens exclusively via
+// `@paymap/shared`'s `decimalToBaseUnits`/`baseUnitsToDecimalString`.
+//
+// Time columns: `DateTime` (Postgres `timestamptz`), always UTC, always
+// serialized as ISO 8601 at the API boundary (CLAUDE.md §9). On-chain calls
+// convert to/from Unix seconds at the `packages/contract-client` boundary,
+// never here.
+//
+// Two models below are additive beyond PLAN.md §13's literal list, both
+// required to satisfy explicit CLAUDE.md §5/§10 requirements that §13 does
+// not itself model:
+//   - `ApiKey`: PLAN.md §13 puts `apiKeyHash` directly on `Merchant`, which
+//     cannot express "issue a new key, revoke the old one, keep history"
+//     (CLAUDE.md §10 "support key rotation"). A one-to-many table is the
+//     minimal shape that supports rotation without losing the revoked
+//     key's audit trail.
+//   - `RefundRequest`: needed to give `refundId` its own unique constraint
+//     (explicitly required by CLAUDE.md §5) distinct from `paymentId` — a
+//     refund is requested against a payment, not identified by one, and
+//     PLAN.md's `Payment` entity has no refund fields at all. Its
+//     `status` reuses `ChargeRequestStatus`: CLAUDE.md §17 only names a
+//     charge-request lifecycle, but the same
+//     scheduled→processing→submitted→succeeded/failed shape applies
+//     verbatim to any relayer-submitted on-chain action, and a second,
+//     structurally-identical enum would be pure duplication.
 
+// Generated into a fixed relative path (not the `@prisma/client` package
+// resolution trick) — avoids pnpm workspace hoisting ambiguity entirely
+// (verified: the classic no-`output` flow made `prisma generate` attempt a
+// nested `pnpm add @prisma/client` subprocess that reliably fails when
+// invoked from inside another pnpm-run process in this workspace). This is
+// also Prisma's own documented forward path for pnpm monorepos.
 generator client {
   provider = "prisma-client-js"
+  output   = "./generated/client"
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+enum MerchantStatus {
+  active
+  disabled
+}
+
+enum ApiKeyStatus {
+  active
+  revoked
+}
+
+enum CheckoutSessionStatus {
+  pending
+  completed
+  expired
+  canceled
+}
+
+enum AmountType {
+  fixed
+  variable
+}
+
+/// CLAUDE.md §17 charge-request state machine, frozen. Phase 8 only ever
+/// writes `scheduled`; every other transition is Phase 9's relayer, but the
+/// guard (`src/state-machine.ts`) enforcing legal transitions ships now.
+enum ChargeRequestStatus {
+  scheduled
+  processing
+  simulated
+  submitted
+  succeeded
+  retryable_failed
+  permanently_failed
+}
+
+enum WebhookDeliveryStatus {
+  pending
+  delivering
+  delivered
+  retry_scheduled
+  dead_letter
+}
+
+model User {
+  id            String   @id @default(uuid())
+  walletAddress String   @unique
+  email         String?
+  createdAt     DateTime @default(now())
+}
+
+model Merchant {
+  id            String         @id @default(uuid())
+  name          String
+  walletAddress String
+  webhookUrl    String?
+  webhookSecret String?
+  status        MerchantStatus @default(active)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  apiKeys           ApiKey[]
+  products          Product[]
+  checkoutSessions  CheckoutSession[]
+  mandateIndexes    MandateIndex[]
+  chargeRequests    ChargeRequest[]
+  payments          Payment[]
+  refundRequests    RefundRequest[]
+  webhookDeliveries WebhookDelivery[]
+  idempotencyKeys   IdempotencyKey[]
+}
+
+/// Hashed at rest via HMAC-SHA256 with `API_KEY_HASH_SECRET` as the pepper
+/// (CLAUDE.md §16) — never bcrypt-of-nothing, never the raw key. `keyPrefix`
+/// (first chars of the raw key, non-secret) is an index-only lookup aid so
+/// auth doesn't need a full-table scan; the actual match is a constant-time
+/// comparison of `keyHash` in application code (`src/auth/api-key.ts`).
+model ApiKey {
+  id         String       @id @default(uuid())
+  merchantId String
+  merchant   Merchant     @relation(fields: [merchantId], references: [id])
+  keyPrefix  String
+  keyHash    String       @unique
+  status     ApiKeyStatus @default(active)
+  createdAt  DateTime     @default(now())
+  revokedAt  DateTime?
+
+  @@index([merchantId])
+  @@index([keyPrefix])
+}
+
+model Product {
+  id                     String     @id @default(uuid())
+  merchantId             String
+  merchant               Merchant   @relation(fields: [merchantId], references: [id])
+  name                   String
+  description            String?
+  assetAddress           String
+  /// Declared decimals of `assetAddress`, needed for decimal<->base-unit
+  /// conversion (CLAUDE.md §9). Not in PLAN.md §13's literal field list but
+  /// unavoidable — conversion is impossible without it.
+  assetDecimals          Int
+  amountType             AmountType
+  /// Base units, required (and only meaningful) when amountType = fixed.
+  fixedAmount            String?
+  /// Base units, required (and only meaningful) when amountType = variable.
+  maxPerCharge           String?
+  maxPerPeriod           String
+  periodSeconds          Int
+  minIntervalSeconds     Int
+  /// 0 = unlimited, mirroring the contract's own convention.
+  maxSuccessfulCharges   Int
+  defaultDurationSeconds Int
+  active                 Boolean    @default(true)
+  createdAt              DateTime   @default(now())
+
+  checkoutSessions CheckoutSession[]
+
+  @@index([merchantId])
+}
+
+model CheckoutSession {
+  id              String                @id @default(uuid())
+  merchantId      String
+  merchant        Merchant              @relation(fields: [merchantId], references: [id])
+  productId       String
+  product         Product               @relation(fields: [productId], references: [id])
+  clientReference String?
+  payerAddress    String?
+  expiresAt       DateTime
+  status          CheckoutSessionStatus @default(pending)
+  /// Hex mandate id, set once the payer creates the on-chain mandate.
+  mandateId       String?
+  createdAt       DateTime              @default(now())
+
+  @@index([merchantId])
+}
+
+/// Best-effort indexed cache of on-chain mandate state. Never read as the
+/// authority for a charge/refund decision (CLAUDE.md §2) — refreshed
+/// opportunistically whenever `GET /v1/mandates/:id` performs a live
+/// on-chain read.
+model MandateIndex {
+  mandateId            String    @id
+  merchantId           String
+  merchant             Merchant  @relation(fields: [merchantId], references: [id])
+  payerAddress         String
+  merchantAddress      String
+  assetAddress         String
+  status               String
+  contractStateVersion Int       @default(0)
+  lastIndexedLedger    BigInt?
+  lastIndexedAt        DateTime?
+  createdAt            DateTime  @default(now())
+
+  @@index([merchantId])
+  @@index([payerAddress])
+}
+
+model ChargeRequest {
+  id              String              @id @default(uuid())
+  merchantId      String
+  merchant        Merchant            @relation(fields: [merchantId], references: [id])
+  mandateId       String
+  /// Hex 32-byte id submitted on-chain as `charge_id` — the contract's own
+  /// replay guard. Generated server-side at creation time.
+  chargeId        String              @unique
+  amount          String
+  invoiceHash     String
+  scheduledFor    DateTime
+  status          ChargeRequestStatus @default(scheduled)
+  attemptCount    Int                 @default(0)
+  failureCode     String?
+  transactionHash String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  payment Payment?
+
+  @@index([merchantId])
+  @@index([mandateId])
+  @@index([status])
+}
+
+/// Written only from a confirmed on-chain result (Phase 9's relayer) —
+/// never from this API's own optimism (CLAUDE.md §1/§2). Phase 8 never
+/// inserts rows here except in tests that need a fixture payment to exist
+/// in order to exercise the refund endpoint ahead of Phase 9 landing.
+model Payment {
+  paymentId       String   @id
+  merchantId      String
+  merchant        Merchant @relation(fields: [merchantId], references: [id])
+  mandateId       String
+  chargeId        String   @unique
+  chargeRequestId String?  @unique
+  chargeRequest   ChargeRequest? @relation(fields: [chargeRequestId], references: [id])
+  amount          String
+  assetAddress    String
+  transactionHash String
+  ledger          BigInt
+  /// Cumulative confirmed-refunded base units against this payment. Updated
+  /// only once a refund actually confirms on-chain (future phase) — never
+  /// optimistically from `RefundRequest` creation.
+  refundedTotal   String   @default("0")
+  createdAt       DateTime @default(now())
+
+  refundRequests RefundRequest[]
+
+  @@index([merchantId])
+  @@index([mandateId])
+}
+
+model RefundRequest {
+  id              String              @id @default(uuid())
+  merchantId      String
+  merchant        Merchant            @relation(fields: [merchantId], references: [id])
+  paymentId       String
+  payment         Payment             @relation(fields: [paymentId], references: [paymentId])
+  /// Hex 32-byte id submitted on-chain as `refund_id` — generated server-side.
+  refundId        String              @unique
+  amount          String
+  status          ChargeRequestStatus @default(scheduled)
+  transactionHash String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([merchantId])
+  @@index([paymentId])
+}
+
+model WebhookDelivery {
+  id            String                @id @default(uuid())
+  merchantId    String
+  merchant      Merchant              @relation(fields: [merchantId], references: [id])
+  eventId       String                @unique
+  eventType     String
+  payload       Json
+  attemptCount  Int                   @default(0)
+  nextAttemptAt DateTime?
+  status        WebhookDeliveryStatus @default(pending)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  @@index([merchantId])
+  @@index([status])
+}
+
+/// `POST /v1/checkout-sessions`, `POST /v1/mandates/:id/charges`, and
+/// `POST /v1/payments/:id/refunds` all require an `Idempotency-Key` header
+/// (CLAUDE.md §10). `requestHash` is the canonical hash of the request body;
+/// a reused key with a different hash is rejected with 409 rather than
+/// executed (`src/idempotency/middleware.ts`).
+model IdempotencyKey {
+  id             String   @id @default(uuid())
+  merchantId     String
+  merchant       Merchant @relation(fields: [merchantId], references: [id])
+  key            String
+  requestHash    String
+  responseStatus Int?
+  responseBody   Json?
+  createdAt      DateTime @default(now())
+
+  @@unique([merchantId, key])
 }

@@ -12,6 +12,27 @@ concurrency:
 jobs:
   node:
     runs-on: ubuntu-latest
+    # Phase 8's apps/api test suite runs real integration tests against
+    # Postgres (never a mocked database) — provided here as a service
+    # container rather than docker-compose.yml, since Actions runners
+    # already give every job a Docker daemon and `services:` is the
+    # idiomatic way to wire one up for CI.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: paymap
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d paymap"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/paymap?schema=public
     steps:
       - uses: actions/checkout@v4
 

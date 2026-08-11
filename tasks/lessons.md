@@ -265,3 +265,58 @@
   (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, etc.) still
   apply fine to that package's hand-written files alongside the relaxed
   generated one.
+- In a pnpm workspace, a Prisma schema that lives outside every package
+  (e.g. a monorepo-root `prisma/schema.prisma`, per CLAUDE.md §4) breaks
+  `prisma generate`'s default no-`output` behavior: it resolves
+  `@prisma/client` relative to the *schema's own directory*, and if that
+  directory has no satisfying install it shells out to
+  `pnpm add @prisma/client@<version>` as a subprocess — which reliably
+  failed (exit 1, no useful stderr) every time it was spawned from inside
+  another `pnpm run` invocation (lockfile/store contention with the parent
+  process), while the identical command run directly in a shell always
+  succeeded. Fix: give `generator client` an explicit `output` path (e.g.
+  `output = "./generated/client"`) — this is also Prisma's own documented
+  forward-compatible pattern and sidesteps the whole resolution problem.
+  Centralize the resulting deep relative import (`../../../prisma/generated/
+  client/index.js` or similar) in exactly one file per consuming package
+  (mirror `packages/contract-client/src/deployment-registry.ts`'s existing
+  repo-root-reach-through convention) so nothing else needs to know the path.
+- Prisma's CLI (`prisma migrate deploy`/`generate`) reads `DATABASE_URL` from
+  its own environment at invoke time — independent of whatever a
+  `vitest.setup.ts` sets on `process.env` for the *test* process. Running
+  `prisma migrate deploy --schema ../../prisma/schema.prisma` from a
+  different package's directory (e.g. `apps/api`, schema two levels up)
+  won't pick up a root-level `.env` automatically. Fix: place a `.env`
+  (gitignored, same as any other) directly next to `schema.prisma` — Prisma
+  loads `.env` from the schema's own directory. In CI, set `DATABASE_URL` as
+  a job/step-level environment variable instead; no file needed there.
+- A plain `INSERT` (Prisma's typed `.create()`) that hits a unique-
+  constraint violation *inside a transaction* doesn't just fail that one
+  statement — it poisons the entire enclosing Postgres transaction
+  (`25P02: current transaction is aborted, commands ignored until end of
+  transaction block`). Catching the JS exception and then trying to run
+  *any* further query in that same transaction (e.g. a `SELECT` to read the
+  winning row for an idempotency replay) fails too, even though the code
+  "handles" the first error. For an insert-or-read-existing pattern that
+  must stay in one transaction (to inherit Postgres's MVCC blocking
+  behavior against a concurrent conflicting insert), use raw SQL
+  `INSERT ... ON CONFLICT (...) DO NOTHING RETURNING id` instead — it keeps
+  the same blocking-until-the-other-transaction-resolves semantics but
+  never raises a Postgres-level error on a real conflict, only returns zero
+  rows, so the transaction stays healthy for whatever reads come next.
+  Caught by an actual 8-way-concurrent integration test against a real
+  Postgres, not by inspection — the bug only manifested under genuine
+  concurrent execution, never in the single-caller path.
+- `@fastify/rate-limit` (v10, verified against its own source,
+  `index.js:333`) does `throw params.errorResponseBuilder(req, respCtx)`
+  **verbatim** — whatever plain object/value a custom `errorResponseBuilder`
+  returns becomes the "error" Fastify's central `setErrorHandler` receives,
+  completely unwrapped. Only the plugin's own *default* builder returns a
+  real `Error` instance with `.statusCode` set; a custom builder returning
+  e.g. `{code, message}` with no `statusCode` field is indistinguishable
+  from any other unexpected object once it reaches a generic error handler
+  that checks `error.statusCode === 429` or `error instanceof Error` — it
+  silently falls through to a 500 instead of the intended 429. If you
+  override `errorResponseBuilder`, include `statusCode: context.statusCode`
+  in the returned object (mirroring what the default builder does) and
+  detect it in your error handler by that shape, not by `instanceof`.

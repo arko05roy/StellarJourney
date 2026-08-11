@@ -6,14 +6,25 @@
   "main": "./dist/index.js",
   "scripts": {
     "lint": "eslint .",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.json",
-    "test": "echo \"no tests yet\" && exit 0"
+    "typecheck": "pnpm run db:generate && tsc -p tsconfig.json --noEmit",
+    "build": "pnpm run db:generate && tsc -p tsconfig.json",
+    "test": "prisma migrate deploy --schema ../../prisma/schema.prisma && pnpm run db:generate && vitest run",
+    "db:generate": "prisma generate --schema ../../prisma/schema.prisma"
   },
   "dependencies": {
-    "@paymap/config": "workspace:*"
+    "@fastify/rate-limit": "^10.2.2",
+    "@paymap/config": "workspace:*",
+    "@paymap/contract-client": "workspace:*",
+    "@paymap/shared": "workspace:*",
+    "@paymap/stellar": "workspace:*",
+    "@prisma/client": "^6.19.3",
+    "fastify": "^5.2.1",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.5"
+    "@stellar/stellar-sdk": "^16.1.0",
+    "@types/node": "^22.10.5",
+    "prisma": "^6.19.3",
+    "vitest": "^2.1.8"
   }
 }

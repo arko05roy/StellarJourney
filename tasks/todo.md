@@ -165,15 +165,15 @@ the full rationale.
 
 ## Phase 8 — Merchant API
 
-- [ ] Prisma schema: User, Merchant, Product, CheckoutSession, MandateIndex, ChargeRequest, Payment, WebhookDelivery, IdempotencyKey (PLAN.md §13)
-- [ ] Unique constraints: `(merchantId, idempotencyKey)`, `chargeId`, `paymentId`, `refundId`, webhook `eventId`
-- [ ] API key issue/hash/rotate; shown once; `API_KEY_HASH_SECRET`
-- [ ] Endpoints (PLAN.md §14) — every input Zod-validated
-- [ ] Idempotency middleware: store merchant+key+request hash+status+body; different hash w/ same key → 409
-- [ ] ChargeRequest state machine w/ DB transactions (CLAUDE.md §17)
-- [ ] Contract-error → API-error mapping, original code preserved, no generic `INTERNAL_ERROR`
-- [ ] Rate limits on key-issuance + charge endpoints
-- [ ] Tests: auth, validation, idempotency replay + conflict, state transitions
+- [x] Prisma schema: User, Merchant, Product, CheckoutSession, MandateIndex, ChargeRequest, Payment, WebhookDelivery, IdempotencyKey (PLAN.md §13) — plus `ApiKey` and `RefundRequest`, both necessary additions (see Review below)
+- [x] Unique constraints: `(merchantId, idempotencyKey)`, `chargeId`, `paymentId`, `refundId`, webhook `eventId`
+- [x] API key issue/hash/rotate; shown once; `API_KEY_HASH_SECRET`
+- [x] Endpoints (PLAN.md §14) — every input Zod-validated
+- [x] Idempotency middleware: store merchant+key+request hash+status+body; different hash w/ same key → 409
+- [x] ChargeRequest state machine w/ DB transactions (CLAUDE.md §17)
+- [x] Contract-error → API-error mapping, original code preserved, no generic `INTERNAL_ERROR`
+- [x] Rate limits on key-issuance + charge endpoints
+- [x] Tests: auth, validation, idempotency replay + conflict, state transitions
 
 **Gate:** `pnpm test` (API integration suite w/ Docker Postgres).
 
@@ -961,3 +961,148 @@ against, so re-proving them against testnet specifically was judged lower-value 
 asset/auth-flow proof this phase actually needed; a natural target for Phase 9's relayer
 integration tests once that worker exists. `apps/api`/`apps/relayer` do not yet read
 `deployments/testnet.json` or `MANDATE_CONTRACT_ID` from a live environment (Phase 8+).
+
+### Phase 8 — Merchant API (done)
+
+**What changed:** built `apps/api` — a Fastify 5 server exposing PLAN.md §14's ten endpoints plus
+two necessary additions (`POST /v1/merchants`, `POST /v1/merchants/me/api-keys/rotate` — CLAUDE.md
+§10 requires key issue/hash/rotate; there's no way to obtain the first key without some endpoint).
+`prisma/schema.prisma` gained 9 named models (`User`, `Merchant`, `Product`, `CheckoutSession`,
+`MandateIndex`, `ChargeRequest`, `Payment`, `WebhookDelivery`, `IdempotencyKey`) plus two flagged
+additions: `ApiKey` (a one-to-many table under `Merchant` — PLAN.md §13 puts `apiKeyHash` directly
+on `Merchant`, which can't express rotation-with-history) and `RefundRequest` (needed to give
+`refundId` its own unique constraint distinct from `paymentId`, since `Payment` has no refund
+fields at all). Every money column is a `String` holding integer base units (never `Decimal`/
+`Int`/`Float`); every enum (`ChargeRequestStatus`, `WebhookDeliveryStatus`, etc.) is explicit.
+`ChargeRequestStatus` is reused verbatim for `RefundRequest.status` — no separate refund-request
+lifecycle exists in the spec and the states are identical in shape.
+
+**Generated Prisma client placement (deviation, verified necessary):** `generator client` in
+`prisma/schema.prisma` sets an explicit `output = "./generated/client"` rather than the classic
+`node_modules/@prisma/client` default. Verified necessary, not stylistic: with no `output`,
+`prisma generate` resolves `@prisma/client` relative to the *schema's* directory (repo root
+`prisma/`), and when unsatisfied there it shells out to `pnpm add @prisma/client@<version>` —
+which reliably failed every time with exit code 1 when that subprocess was itself spawned from
+inside another `pnpm run` invocation (this workspace's lockfile/store contention; running the
+identical `pnpm add` command directly, not nested, always succeeded). The explicit `output` path
+sidesteps the whole class of problem and is also Prisma's own documented forward-compatible
+pattern for pnpm monorepos. `apps/api/src/db.ts` is the single file that knows the relative
+repo-root-reaching path (mirrors `packages/contract-client/src/deployment-registry.ts`'s existing
+convention); every other module imports Prisma types from `db.ts`, never the generated output
+directly. `prisma/generated/` is gitignored; `apps/api/package.json`'s `typecheck`/`build`/`test`
+scripts all regenerate it first (`prisma generate`/`migrate deploy` are idempotent, ~70ms).
+
+**API key hashing:** `apps/api/src/auth/api-key.ts` — HMAC-SHA256 with `API_KEY_HASH_SECRET` as
+pepper (never a bare hash of the key). Raw key format `sk_live_<32 random bytes, base64url>`. A
+short, non-secret `keyPrefix` (first 19 chars) is an indexed lookup aid only; the actual match is
+`crypto.timingSafeEqual` on the full digest — genuinely constant-time, not just an indexed
+equality check. Distinguishes `INVALID_API_KEY` (no match) from `API_KEY_REVOKED` (hash matches a
+since-rotated-out key) from `MERCHANT_DISABLED` (valid key, disabled account) — three different
+401/403 codes, not one generic auth failure. Rotation (`rotateApiKey`) revokes the old row and
+inserts the new one inside one `$transaction` — never a window with zero or two active keys.
+
+**Idempotency concurrency-safety — a real bug found and fixed, not assumed correct:** the first
+implementation caught Prisma's `P2002` (unique-violation) from a plain `.create()` inside the
+transaction and then tried to `SELECT` the winning row in the *same* transaction — this reliably
+failed with Postgres error `25P02` ("current transaction is aborted") under the concurrency test,
+because a real constraint-violation error poisons the *entire* enclosing transaction, not just the
+one statement; every subsequent query in that transaction fails too. Fixed by replacing the insert
+with raw SQL: `INSERT ... ON CONFLICT ("merchantId", "key") DO NOTHING RETURNING id` — Postgres
+still applies the identical MVCC blocking rule (a concurrent transaction's insert of the same key
+blocks until the first commits or rolls back), but `ON CONFLICT DO NOTHING` never raises a
+Postgres-level error on the real conflict, only returns zero rows, so the enclosing transaction
+stays healthy and can immediately `SELECT` the winner's now-committed, fully-populated response.
+Verified with a real test: 8 concurrent `runIdempotent` calls with the same key/body against a
+real Postgres produce exactly 1 execution and 8 identical responses (`idempotency/middleware.test.ts`).
+The insert, the handler, and the response-write all share one transaction — a handler that throws
+rolls the idempotency record back too, so a failed attempt never "burns" the key.
+
+**On-chain precheck:** `apps/api/src/chain/precheck.ts` mirrors
+`contracts/mandate-registry/src/charge.rs`'s validation order for every step answerable from the
+`Mandate` struct alone (status, start/expiry, amount rule, min interval, max count, period
+rollover+cap) — deliberately skips merchant-auth/duplicate-charge-id (meaningless before a
+signature/charge-id exist) and allowance/balance (duplicates the relayer's own Phase 9 pre-flight;
+a charge that clears this precheck can still fail those two at actual submission). Routes depend
+on a narrow `MandateReader` interface (`apps/api/src/chain/mandate-reader.ts`), never
+`@paymap/contract-client` directly — tests inject a fake, in-memory reader with canned mandate
+states instead of hitting real Soroban RPC; the production wrapper
+(`createChainMandateReader`) is a thin pass-through to `@paymap/contract-client`'s real
+simulation-backed reads. The precheck runs *before* the idempotency transaction (a pure read, so a
+retry re-validating fresh state is strictly more correct than replaying a stale verdict).
+
+**ChargeRequest state machine:** `apps/api/src/state-machine.ts` — a pure guard table
+(`assertLegalChargeRequestTransition`) plus a DB-atomic `transitionChargeRequest` (a guarded
+`updateMany` scoped to the expected current status, so two concurrent transition attempts can
+never both apply). Exactly the edges CLAUDE.md §17 draws; Phase 8 only ever writes `scheduled`.
+
+**Rate-limit bug found while testing, fixed:** `@fastify/rate-limit` (verified against its own
+source, `index.js:333`) does `throw params.errorResponseBuilder(req, respCtx)` **verbatim** — the
+custom builder's return value becomes the "error" Fastify's central error handler receives,
+*not* wrapped in an `Error` with `.statusCode` set automatically (only its own *default* builder
+does that). An initial custom builder returning `{code, message}` with no `statusCode` field was
+silently swallowed into the generic 500 branch instead of ever producing a 429. Fixed by including
+`statusCode: context.statusCode` in the builder's return value (mirroring what the plugin's own
+default does) and checking for that shape (not `instanceof Error`) in the app's error handler.
+Caught by the rate-limit test itself, not discovered by inspection.
+
+**Tests:** 142 tests across 12 files in `apps/api`, all real integration tests against the
+Postgres started by `docker-compose.yml` (no mocked database anywhere) — `auth/api-key.test.ts`
+(10: hashing determinism/pepper-sensitivity, valid/invalid/malformed/wrong-secret/revoked/
+disabled-merchant auth, rotation), `state-machine.test.ts` (54: every one of the 7×7 transition
+pairs asserted legal or illegal, plus DB-atomicity), `chain/precheck.test.ts` (21: every contract
+error code the precheck can produce, plus exact period-boundary/min-interval-boundary tests),
+`idempotency/middleware.test.ts` (6: replay, conflict, per-merchant isolation, 8-way concurrency),
+`errors.test.ts` (2: every one of the 24 frozen contract codes maps to a non-`INTERNAL_ERROR`
+status), and 7 route-level files (`merchants`, `products`, `checkout-sessions`, `mandates`,
+`charges`, `payments`, `webhook-endpoints`) covering auth requirements, every Zod-rejection class
+(bad address, unknown asset, zero/negative/over-precision amount, unbounded duration, non-http(s)
+webhook URL), idempotency replay/conflict/concurrency at the route level, mandate-ownership
+404-not-403, and rate-limiting. Run via `docker compose up -d && pnpm --filter @paymap/api test`
+(or `pnpm test` from the root); documented in `docs/merchant-api.md`.
+
+**CI:** `.github/workflows/ci.yml`'s `node` job gained a `postgres:16` service container +
+job-level `DATABASE_URL` so `pnpm test` (now including `apps/api`'s real-Postgres suite) runs
+unchanged in CI.
+
+**Commands run (all passed):**
+```
+docker compose up -d
+pnpm install
+pnpm lint                            (14/14 tasks)
+pnpm typecheck                       (14/14 tasks)
+pnpm build                           (14/14 tasks)
+pnpm test                            (14/14 tasks; apps/api: 142 new tests, all pass)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-token + 3
+                                       evil-token, unchanged — no contract touched this phase)
+```
+
+**Deviations from spec (flagged, not silent):**
+- Two endpoints beyond PLAN.md §14's literal list (`POST /v1/merchants`,
+  `POST /v1/merchants/me/api-keys/rotate`) — necessary for CLAUDE.md §10's key issue/rotate
+  requirement to be reachable at all. Documented in `docs/merchant-api.md`'s scope-note section.
+- `ApiKey` and `RefundRequest` models beyond PLAN.md §13's literal 9-model list — both load-bearing
+  for explicit CLAUDE.md §5 requirements (rotation-with-history; a `refundId` unique constraint
+  distinct from `paymentId`), documented in `prisma/schema.prisma`'s header comment.
+- Rate limiting is IP-keyed for every route, including authenticated ones (not merchant-scoped) —
+  simplest correct MVP choice; documented as a deferred refinement in both
+  `docs/merchant-api.md` and the new Phase 8 section of `docs/threat-model.md`.
+- The on-chain charge precheck does not check token allowance/balance (steps 13-14 of
+  `charge.rs`) — deliberately deferred to the relayer's own Phase 9 pre-flight rather than
+  duplicating a token-client dependency here; documented in `precheck.ts`'s module doc.
+- `POST /v1/webhook-endpoints/test` never makes a live outbound HTTP call (queues a `pending`
+  `WebhookDelivery` row only) — explicit Phase 8 scope boundary ("don't build the worker"); real
+  delivery needs Phase 14's SSRF hardening first, noted in `docs/threat-model.md`.
+
+**Unverified / left for later phases:** no relayer exists yet, so `ChargeRequest`/`RefundRequest`
+rows never progress past `scheduled` in this phase (Phase 9). Refund submission (merchant-
+authorizes/relayer-submits, mirroring `charge`) is not implemented — Phase 8 only validates and
+schedules a `RefundRequest`; which future phase drives it to submission was not specified by the
+lead and is flagged here rather than guessed at. Webhook HMAC signing and the delivery worker are
+Phase 12. Turborepo's file-hash-based task caching for `apps/api` does not explicitly declare
+`../../prisma/schema.prisma`/`../../prisma/migrations/**` as tracked `inputs` — a schema-only edit
+with zero changes inside `apps/api` itself could theoretically hit a stale cache; low-risk (the
+generated client is regenerated unconditionally at the start of every script invocation that does
+run) and not fixed in this phase to avoid touching the shared root `turbo.json` for a single
+package's edge case.
