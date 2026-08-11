@@ -328,3 +328,151 @@ make it explicitly test-only and documented as never-to-deploy:
 `transfer_from`'s allowance/balance decrements use `checked_sub` plus an explicit `< 0` check
 (not bare `checked_sub` alone) since `i128` subtraction below zero is a valid non-overflowing
 value — the insufficiency itself is a business-rule panic, not an arithmetic overflow.
+
+---
+
+## Phase 4 — Variable Charge + Billing-Period Accounting
+
+Scope: `charge.rs` steps 11-12 (billing-period rollover, `max_per_period` enforcement) and the
+post-transfer `Completed` transition. No new error codes were needed — `AmountExceedsPeriodLimit`
+(11) was already frozen in Phase 1, unused until now.
+
+### Period-index formula and boundary semantics
+
+```text
+period_index = floor((now - start_at) / period_seconds)
+computed_period_start = start_at + period_index * period_seconds
+```
+
+`now >= start_at` is already guaranteed by validation step 3 (which runs before step 11), so the
+subtraction cannot underflow, and `period_seconds > 0` is guaranteed for the mandate's entire
+lifetime by `create_mandate`'s input validation (Phase 2) — it is never mutated afterward — so the
+division can never panic.
+
+**Boundary is `>=`, not `>`.** At `now == start_at + n*period_seconds` exactly, integer division
+gives `period_index == n` — the charge is already classified as belonging to period `n`, not
+`n - 1`. A charge one second before that boundary still resolves to `period_index == n - 1`. Both
+directions are asserted explicitly:
+`test_period::period_boundary_second_before_still_old_period_exact_boundary_is_new_period`
+constructs a mandate whose single period-saturating charge means "still old period" is
+observable as a period-cap rejection, and "new period" as a fresh-allowance success, at adjacent
+timestamps one second apart.
+
+### How "the stored period" is identified
+
+The `Mandate` struct persists `current_period_start` (a timestamp), not an index. `charge.rs`
+identifies whether this charge is still in the same period as last time by **comparing the
+freshly computed `computed_period_start` directly against the stored `current_period_start`**,
+rather than deriving a stored index from `current_period_start` and comparing indices. Both
+approaches are mathematically equivalent given `period_seconds`'s immutability, but the direct
+boundary comparison was chosen because it needs no extra assumption about how
+`current_period_start` was produced — it is the one value the `Mandate` actually persists, so
+comparing against it directly is the more literal statement of "is this still the period we last
+recorded."
+
+- If `computed_period_start != mandate.current_period_start`: this charge is the first one
+  observed in a period that has never been seen before. The *effective* `current_period_collected`
+  for this charge is `0` (a full reset) and the *effective* `current_period_start` is
+  `computed_period_start`.
+- If they match: the effective collected total is whatever is already stored — this charge is
+  still within the same period as the last charge.
+
+### Skipped periods resolve in one step, never a loop
+
+Because `computed_period_start` is derived directly from a single division (`period_index =
+floor((now - start_at) / period_seconds)`), a long gap between charges — e.g. five whole periods
+with no charges at all — still resolves to the correct far-forward boundary in one arithmetic
+step. There is no "advance one period at a time" loop that could under- or over-shoot, and the
+allowance can only ever be reset once for whichever period `now` actually falls in.
+`test_period::period_skipped_periods_land_in_correct_far_forward_boundary` proves this: after a
+5-period gap, `current_period_start` lands exactly on period 5's boundary
+(`start_at + 5*period_seconds`), not period 1's boundary and not `now` itself.
+
+### Rollover sets the boundary, never `now`
+
+`current_period_start` is always written as `computed_period_start` (`start_at +
+period_index*period_seconds`), **never as `now`**. Setting it to `now` would let the billing
+window drift forward on every charge instead of staying pinned to fixed-duration boundaries from
+`start_at` — the entire reason PLAN.md §9/§10.7 mandate fixed-duration periods instead of
+calendar-relative ones. `test_period::period_rollover_resets_allowance_and_sets_boundary_not_now`
+charges at a timestamp strictly inside period 1 and asserts `current_period_start` equals the
+period boundary (`start_at + period_seconds`), explicitly asserting it does **not** equal `now`.
+
+### `max_per_period` enforcement (step 12)
+
+`effective_period_collected + amount <= max_per_period`, else `AmountExceedsPeriodLimit`, using
+`math::checked_add_i128`. Proven with: two charges in the same period summing to exactly the cap
+(both succeed), a third charge of any positive amount immediately after (rejected), and — via a
+mandate written directly into storage, since `create_mandate` can never itself produce a mandate
+whose per-charge cap exceeds `max_per_period` — a single first-in-period charge whose amount alone
+exceeds the cap (also rejected), proving step 12 is an independent defense layer and not merely
+unreachable dead code riding on step 8's per-charge cap.
+
+### Rollover-then-completion computation order, and the rollback guarantee
+
+Per the Phase 4 lead decision, the effective `current_period_collected` / `current_period_start`
+are **computed** at steps 11-12 (before any token call) but **written to storage only after
+`transfer_from` returns successfully**, in the same accounting block as every other Phase 3
+accounting field. There is no separate write path that persists rollover independently of a
+successful charge — this preserves the Phase 3 rollback invariant (a failed transfer traps the
+whole invocation, and the Soroban host discards every storage write made so far) without any new
+code path that could break it.
+
+This was verified with a real failing token, not assumed:
+`test_period::rollover_reverts_on_failed_transfer_leaves_period_state_unchanged` charges once to
+saturate period 0, advances into period 1 (a charge here would roll the period over), forces
+`mock-token`'s `set_fail_transfers(true)`, and asserts — via a direct storage read after catching
+the resulting panic — that the mandate is **byte-for-byte identical** to its state before the
+failed attempt (`current_period_start`, `current_period_collected`, and every other field). It then
+flips the token back to working and retries the same `charge_id`, which now genuinely rolls the
+period over.
+
+### Completion transition
+
+After a successful charge, if `mandate.max_successful_charges != 0` (`0` still means unlimited,
+the Phase 2 convention) and the just-incremented `successful_charges` equals it exactly, the
+mandate's `status` is set to `Completed` and a `mandate_completed` event (`events.rs`) is
+published — both inside the same post-transfer accounting block as the rest of the charge's
+effects, so completion can never be observed without the charge that caused it also having
+succeeded (and vice versa: the charge cannot succeed without completion also being applied, if the
+count condition holds).
+
+`test_period::completion_reaches_max_charges_transitions_and_rejects_next_charge` proves the whole
+chain: the charge that reaches the cap emits both `charge_succeeded` and `mandate_completed` (in
+that order, asserted against `env.events().all()` immediately after the call — before any other
+contract invocation, since that view only reflects the *last* invocation), the stored `status`
+becomes `Completed`, and the very next charge attempt fails with `MandateCompleted` — not
+`ChargeCountExceeded`, since step 2 rejects on stored status before step 10 is ever reached.
+`test_period::completion_unlimited_max_charges_zero_never_completes` proves the converse: a
+mandate with `max_successful_charges == 0` charges past an arbitrary count while remaining
+`Active`.
+
+**Consequence for step 10 (`ChargeCountExceeded`):** because completion now happens atomically the
+instant `successful_charges` reaches a non-zero cap, a subsequent charge against a mandate created
+and charged only through the public API will always be rejected at step 2 (`MandateCompleted`)
+before step 10 is ever reached — step 10 is effectively dead code through that path alone. It
+remains real defense-in-depth against a mandate whose `successful_charges` already equals
+`max_successful_charges` while `status` is still `Active`, a combination `create_mandate` can never
+produce but which `test_period::charge_count_exceeded_still_enforced_via_bypassed_active_state`
+constructs directly in storage to prove step 10 independently rejects it. This also required
+updating a Phase 3 test
+(`test_charge::charge_max_successful_charges_reached_rejected`): its second charge attempt now
+correctly expects `MandateCompleted` instead of the Phase-3-era `ChargeCountExceeded`, since the
+first charge already completed the mandate.
+
+### `period_index` in `charge_succeeded` is now authoritative
+
+Phase 3 computed the event's `period_index` directly from `start_at` as a placeholder (documented
+there as informational-only, since `current_period_start` was never recomputed). Phase 4 emits the
+same `period_index` value computed at steps 11-12 — the authoritative value now that real rollover
+exists — with no other change to the event's shape.
+
+### Interaction with `min_interval_seconds`
+
+Validation step 9 (interval) runs before steps 11-12 (rollover), so a period rollover can never
+bypass the interval check: if a mandate's `period_seconds` is shorter than its
+`min_interval_seconds`, a charge attempted after the period has rolled over but before the interval
+has elapsed still correctly fails with `ChargeTooSoon`, not a period-reset success.
+`test_period::min_interval_still_enforced_across_a_period_rollover` proves both halves: the
+too-early attempt (past the period boundary, short of the interval) rejects with `ChargeTooSoon`,
+and the same amount at the interval boundary succeeds with the freshly rolled-over allowance.

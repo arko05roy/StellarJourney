@@ -1,19 +1,54 @@
-//! Fixed charge execution (Phase 3): `charge`, `get_payment` (PLAN.md §10.4,
-//! §10.6, §11, §12; CLAUDE.md §6 validation order — the exact sequence below
-//! is itself a spec, since it determines which error a caller observes when
-//! several rules are violated by the same call at once).
+//! Charge execution (Phase 3 fixed + Phase 4 variable/period accounting):
+//! `charge`, `get_payment` (PLAN.md §10.4, §10.6, §10.7, §10.8, §11, §12;
+//! CLAUDE.md §6 validation order — the exact sequence below is itself a
+//! spec, since it determines which error a caller observes when several
+//! rules are violated by the same call at once).
 //!
 //! ## Scope
 //!
-//! `AmountRule::Fixed` is fully enforced: the charged amount must equal the
-//! configured amount exactly (CLAUDE.md §7 Amounts — a *smaller* amount is
-//! also a violation, not just a larger one). `AmountRule::Variable`'s
-//! per-charge cap (validation step 8) is implemented generically here too
-//! (`amount <= max_per_charge`), per the Phase 3 lead decision, but
+//! `AmountRule::Fixed` requires the charged amount equal the configured
+//! amount exactly (CLAUDE.md §7 Amounts — a *smaller* amount is also a
+//! violation, not just a larger one). `AmountRule::Variable` caps the
+//! per-charge amount at `max_per_charge` (validation step 8).
 //! `max_per_period` enforcement and billing-period rollover (steps 11-12)
-//! are Phase 4's scope. This module still calls out those two steps at
-//! their exact ordinal position so Phase 4 can fill them in without
-//! reordering anything above or below.
+//! are implemented below (Phase 4).
+//!
+//! ## Billing-period rollover (steps 11-12)
+//!
+//! `period_index = floor((now - start_at) / period_seconds)` (PLAN.md
+//! §10.7). The *stored* period is identified by comparing the **computed
+//! period boundary** (`start_at + period_index * period_seconds`) against
+//! the mandate's stored `current_period_start`, rather than deriving a
+//! stored index from `current_period_start` and comparing indices. Both are
+//! mathematically equivalent given `period_seconds` is immutable after
+//! creation, but comparing boundaries directly needs no extra assumption
+//! about how `current_period_start` was produced — it's the one value the
+//! `Mandate` actually persists, so it's the more direct thing to compare
+//! against.
+//!
+//! - If the computed boundary differs from `current_period_start`, this
+//!   charge lands in a period that has never been seen before: the
+//!   *effective* `current_period_collected` for this charge is `0` (a full
+//!   reset), regardless of how many periods were skipped — the boundary is
+//!   computed directly via one division, never by looping period-by-period,
+//!   so a long gap (e.g. 5 skipped periods) still resolves in one step to
+//!   the correct current boundary, and can only ever reset the allowance
+//!   once for that period (CLAUDE.md §7 Time invariant 12).
+//! - If it matches, the effective collected total is the stored one (no
+//!   reset — same period as last time).
+//! - The boundary comparison is (`>=`, not `>`) semantics by construction:
+//!   at `now == start_at + n*period_seconds` exactly, `floor((now -
+//!   start_at) / period_seconds) == n`, so the charge is already treated as
+//!   belonging to period `n` and sees a freshly-reset allowance if `n`'s
+//!   boundary differs from the stored one.
+//!
+//! Per the lead decision, the effective `current_period_collected` and
+//! `current_period_start` are computed here (steps 11-12, before any token
+//! call) but **only written to storage after `transfer_from` succeeds**,
+//! in the same accounting block as everything else — a rolled-over-but-
+//! failed charge must leave storage untouched, exactly like every other
+//! Phase 3 accounting field. There is deliberately no separate write path
+//! that persists rollover independently of a successful charge.
 //!
 //! ## Spender / allowance model
 //!
@@ -30,14 +65,25 @@
 //! ## Accounting-mutates-only-after-transfer
 //!
 //! `successful_charges`, `total_collected`, `current_period_collected`,
-//! `last_charged_at`, the used-charge-id replay guard, the payment receipt,
-//! and the `charge_succeeded` event are all written *after*
-//! `TokenClient::transfer_from` returns successfully. If that call traps,
-//! the entire `charge` invocation traps with it and the Soroban host
-//! discards every storage write the invocation made so far — there is no
-//! partial-mutation path. `test_charge.rs`'s rollback test proves this by
-//! executing a real failing transfer and inspecting storage afterward,
-//! rather than assuming host semantics.
+//! `current_period_start`, `last_charged_at`, the used-charge-id replay
+//! guard, the payment receipt, and the `charge_succeeded` event (plus, when
+//! applicable, the `Completed` status write and `mandate_completed` event)
+//! are all written *after* `TokenClient::transfer_from` returns
+//! successfully. If that call traps, the entire `charge` invocation traps
+//! with it and the Soroban host discards every storage write the invocation
+//! made so far — there is no partial-mutation path. `test_charge.rs`'s and
+//! `test_period.rs`'s rollback tests prove this by executing a real failing
+//! transfer and inspecting storage afterward, rather than assuming host
+//! semantics.
+//!
+//! ## Completion transition
+//!
+//! After a successful charge, if `max_successful_charges != 0` (`0` means
+//! unlimited, the Phase 2 convention) and the new `successful_charges`
+//! equals it exactly, the mandate transitions to `Completed` and a
+//! `mandate_completed` event is published — inside the same post-transfer
+//! accounting block, so this is atomic with the rest of the charge's
+//! effects, not a separate write.
 
 use soroban_sdk::{token::TokenClient, BytesN, Env};
 
@@ -133,17 +179,35 @@ pub fn charge(
         return Err(Error::ChargeCountExceeded);
     }
 
-    // 11. Billing-period rollover — Phase 4 owns
-    // `period_index = floor((now - start_at) / period_seconds)` and resetting
-    // `current_period_collected` / `current_period_start` on index change
-    // (PLAN.md §10.7). Deliberately a no-op in Phase 3: `current_period_start`
-    // is left exactly as `create_mandate` set it.
+    // 11. Billing-period rollover. Compute the effective period state for
+    // this charge without persisting anything yet — see the module doc for
+    // why the boundary (not a derived index) is compared against the stored
+    // `current_period_start`, and why this is safe to compute before the
+    // token calls but must only be written after a successful transfer.
+    // `now >= mandate.start_at` is already guaranteed by step 3, so this
+    // subtraction cannot underflow.
+    let elapsed_since_start = math::checked_sub_u64(now, mandate.start_at)?;
+    let period_index = elapsed_since_start / mandate.period_seconds;
+    let computed_period_start = math::checked_add_u64(
+        mandate.start_at,
+        math::checked_mul_u64(period_index, mandate.period_seconds)?,
+    )?;
+    // A different boundary than the one currently stored means this charge
+    // is the first one observed in a new period (possibly several periods
+    // after the last charge) — the effective allowance resets to zero.
+    // Otherwise this charge is still within the same period as last time,
+    // and the effective collected total is whatever is already stored.
+    let effective_period_collected = if computed_period_start != mandate.current_period_start {
+        0
+    } else {
+        mandate.current_period_collected
+    };
 
-    // 12. Remaining period allowance — Phase 4 owns the
-    // `current_period_collected + amount <= max_per_period` check. Not
-    // enforced in Phase 3 (Fixed-only scope); `current_period_collected` is
-    // still accumulated below (see accounting section) so Phase 4 inherits a
-    // correct running total to enforce against.
+    // 12. Remaining period allowance.
+    let new_period_collected = math::checked_add_i128(effective_period_collected, amount)?;
+    if new_period_collected > mandate.max_per_period {
+        return Err(Error::AmountExceedsPeriodLimit);
+    }
 
     let contract_address = env.current_contract_address();
     let token = TokenClient::new(env, &mandate.asset);
@@ -177,9 +241,23 @@ pub fn charge(
     // --- Accounting mutates only now, after the transfer succeeded. ---
     mandate.successful_charges = math::checked_add_u32(mandate.successful_charges, 1)?;
     mandate.total_collected = math::checked_add_i128(mandate.total_collected, amount)?;
-    mandate.current_period_collected =
-        math::checked_add_i128(mandate.current_period_collected, amount)?;
+    // Write the effective period state computed at steps 11-12 above — never
+    // recomputed here, so a failed transfer (which returns before this line
+    // runs at all) can never have partially applied the rollover.
+    mandate.current_period_start = computed_period_start;
+    mandate.current_period_collected = new_period_collected;
     mandate.last_charged_at = Some(now);
+
+    // Completion transition: 0 means unlimited (Phase 2 convention) and can
+    // never complete. A non-zero cap completes the instant the count first
+    // equals it — this and the accounting above are part of the same write,
+    // so completion can never be observed without the charge that caused it
+    // also having succeeded, and vice versa.
+    let became_completed = mandate.max_successful_charges != 0
+        && mandate.successful_charges == mandate.max_successful_charges;
+    if became_completed {
+        mandate.status = MandateStatus::Completed;
+    }
 
     storage::set_mandate(env, &mandate);
     storage::mark_charge_used(env, mandate_id, charge_id);
@@ -198,14 +276,10 @@ pub fn charge(
     };
     storage::set_payment(env, &receipt);
 
-    // Informational only in Phase 3 (PLAN.md §10.7's formula, computed
-    // straight from `start_at` since `current_period_start` is never
-    // recomputed until Phase 4 implements rollover). `period_seconds > 0` is
-    // guaranteed by `create_mandate`'s input validation and is immutable
-    // thereafter, so the division below cannot panic.
-    let elapsed_since_start = math::checked_sub_u64(now, mandate.start_at)?;
-    let period_index = elapsed_since_start / mandate.period_seconds;
-
+    // `period_index` is now the authoritative value computed at steps 11-12
+    // above (Phase 4) — no longer a placeholder recomputed straight from
+    // `start_at` (that was a Phase 3 stand-in, since `current_period_start`
+    // was never recomputed before now).
     events::ChargeSucceeded {
         mandate_id: mandate_id.clone(),
         payer: mandate.payer.clone(),
@@ -220,6 +294,17 @@ pub fn charge(
         timestamp: now,
     }
     .publish(env);
+
+    if became_completed {
+        events::MandateCompleted {
+            mandate_id: mandate_id.clone(),
+            payer: mandate.payer.clone(),
+            merchant: mandate.merchant.clone(),
+            successful_charges: mandate.successful_charges,
+            timestamp: now,
+        }
+        .publish(env);
+    }
 
     Ok(receipt)
 }

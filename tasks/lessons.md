@@ -104,3 +104,27 @@
   Soroban's own trap propagation — a sub-invocation panic (e.g. a
   test-token's forced-failure branch) unwinds through the client's
   `try_*`/plain call exactly like an auth failure does.
+- `env.events().all()` (and `env.auths()`) only reflect the *last* contract
+  invocation. A test helper that wraps a call and then makes even one more
+  contract call afterward for convenience (e.g. an invariant spot-check like
+  `token.balance(&contract_id)` tacked onto the end of a `charge_success`
+  helper) silently erases the prior call's events/auths for anyone who calls
+  the helper and then tries to inspect them — the assertion doesn't error,
+  it just compares against an empty list. Symptom: `assert_eq!(recorded,
+  expected)` fails with `left: []` even though the code being tested
+  genuinely published the events. Fix: keep any "make one more call to
+  assert an invariant" helper strictly separate from the call whose
+  events/auths matter, and call it only *after* the events/auths inspection
+  is done, never folded into the same helper.
+- Implementing a real `Completed` transition (previously only reachable via
+  direct storage writes in earlier-phase tests) can retroactively invalidate
+  an earlier phase's test that predicted a *different* rejection reason for
+  what is now an unreachable intermediate state. Concretely: a step-N
+  "count/threshold exceeded" pre-flight check that used to be the first
+  thing a repeat caller would hit becomes permanently shadowed by an
+  earlier status check the instant the threshold-reaching action itself
+  starts performing the state transition atomically. When adding a
+  transition like this, grep existing tests for the old error code the
+  soon-to-be-shadowed check returns and update their expectations — and add
+  a fresh bypass-based (direct storage write) test proving the shadowed
+  check still independently fires, so it doesn't go silently untested.

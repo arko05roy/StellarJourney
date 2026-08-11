@@ -80,6 +80,25 @@ pub struct MandateRevoked {
     pub timestamp: u64,
 }
 
+/// Emitted once by `charge` (Phase 4) in the same invocation that pushes a
+/// mandate's `successful_charges` to its non-zero `max_successful_charges`
+/// cap (`0` still means unlimited — this event can never fire for that
+/// case). Published alongside `ChargeSucceeded` in the post-transfer
+/// accounting block, so both events, the accounting update, and the
+/// `Completed` status write are all part of the same atomic outcome: either
+/// none of them happened (transfer trapped) or all of them did.
+#[contractevent]
+pub struct MandateCompleted {
+    #[topic]
+    pub mandate_id: BytesN<32>,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub merchant: Address,
+    pub successful_charges: u32,
+    pub timestamp: u64,
+}
+
 /// Emitted by `charge` (Phase 3) once a payment has been durably recorded —
 /// i.e. only after `TokenClient::transfer_from` succeeded, accounting was
 /// updated, and the receipt was stored. Full field set per PLAN.md §11.

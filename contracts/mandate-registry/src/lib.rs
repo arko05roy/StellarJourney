@@ -3,13 +3,14 @@
 //! This contract is the protocol's policy authority — the backend database
 //! and relayer are never trusted over its on-chain state.
 //!
-//! Phase 3 scope (this file's current state): the payer-only mandate
+//! Phase 4 scope (this file's current state): the payer-only mandate
 //! lifecycle (`create_mandate`, `pause_mandate`, `resume_mandate`,
-//! `revoke_mandate`, `get_mandate`) plus fixed charge execution (`charge`,
-//! `get_payment`) — the first point token transfer occurs. `refund` lands in
-//! Phase 5 (see tasks/todo.md). Lifecycle business logic lives in
-//! `lifecycle.rs`, charge logic in `charge.rs`; this file only declares the
-//! thin `#[contractimpl]` entrypoints that adapt them to the Soroban ABI.
+//! `revoke_mandate`, `get_mandate`) plus charge execution (`charge`,
+//! `get_payment`) — fixed and variable amount rules, billing-period
+//! rollover, and the `Completed` transition. `refund` lands in Phase 5 (see
+//! tasks/todo.md). Lifecycle business logic lives in `lifecycle.rs`, charge
+//! logic in `charge.rs`; this file only declares the thin `#[contractimpl]`
+//! entrypoints that adapt them to the Soroban ABI.
 #![no_std]
 
 // Tests run on std (via soroban-sdk's `testutils`, e.g. `Address::generate`,
@@ -33,6 +34,8 @@ mod test;
 mod test_charge;
 #[cfg(test)]
 mod test_lifecycle;
+#[cfg(test)]
+mod test_period;
 
 use soroban_sdk::{contract, contractimpl, BytesN, Env};
 

@@ -658,6 +658,14 @@ fn charge_max_successful_charges_reached_rejected() {
         &bytes32(&f.env, 0xBB),
     );
 
+    // Phase 4: the charge above already pushed successful_charges to the
+    // cap, which completes the mandate atomically in that same invocation
+    // (see charge.rs's completion transition). So the *next* charge now
+    // observes MandateCompleted at step 2 before ever reaching step 10's
+    // ChargeCountExceeded check — that check is still real defense-in-depth
+    // (e.g. against a bypassed successful_charges >= max_successful_charges
+    // state with status still Active, only reachable via a direct storage
+    // write), just not reachable through this exact call sequence anymore.
     f.env.ledger().set_timestamp(START + MIN_INTERVAL);
     let err = charge_as(
         &f,
@@ -668,7 +676,7 @@ fn charge_max_successful_charges_reached_rejected() {
         &bytes32(&f.env, 0xBB),
     )
     .unwrap_err();
-    assert_eq!(err, Error::ChargeCountExceeded);
+    assert_eq!(err, Error::MandateCompleted);
 }
 
 #[test]

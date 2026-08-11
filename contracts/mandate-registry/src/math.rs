@@ -32,3 +32,9 @@ pub fn checked_sub_u64(a: u64, b: u64) -> Result<u64, Error> {
 pub fn checked_add_u32(a: u32, b: u32) -> Result<u32, Error> {
     a.checked_add(b).ok_or(Error::ArithmeticOverflow)
 }
+
+/// Added in Phase 4 for `period_index * period_seconds` when recomputing the
+/// current billing-period boundary.
+pub fn checked_mul_u64(a: u64, b: u64) -> Result<u64, Error> {
+    a.checked_mul(b).ok_or(Error::ArithmeticOverflow)
+}

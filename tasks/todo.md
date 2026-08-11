@@ -92,11 +92,11 @@ the full rationale.
 
 **Goal:** capped variable billing, period rollover correct.
 
-- [ ] `AmountRule::Variable { max_per_charge }` enforcement
-- [ ] `period_index = floor((now - start_at) / period_seconds)`; on index change reset `current_period_collected = 0`, set `current_period_start` to computed boundary (not `now`)
-- [ ] `max_per_period` remaining-allowance check
-- [ ] `max_successful_charges` → transition `Completed` + `mandate_completed` event
-- [ ] Tests: variable success, over per-charge cap, over per-period cap, two charges same period summing to cap, period rollover resets, skipped-period boundary (long gap), charge exactly at boundary second, max count reached → completed → next charge rejected
+- [x] `AmountRule::Variable(max_per_charge)` enforcement (was already generic since Phase 3; confirmed + extended tests)
+- [x] `period_index = floor((now - start_at) / period_seconds)`; on index change reset `current_period_collected = 0`, set `current_period_start` to computed boundary (not `now`)
+- [x] `max_per_period` remaining-allowance check
+- [x] `max_successful_charges` → transition `Completed` + `mandate_completed` event
+- [x] Tests: variable success, over per-charge cap, over per-period cap, two charges same period summing to cap, period rollover resets, skipped-period boundary (long gap), charge exactly at boundary second, max count reached → completed → next charge rejected
 
 **Gate:** `cargo test --workspace`.
 
@@ -546,3 +546,90 @@ pnpm build
 are Phase 4 scope, not exercised by any Phase 3 test beyond confirming `current_period_collected`
 accumulates correctly with no cap applied yet. `refund` doesn't exist until Phase 5. The full
 CLAUDE.md §7 invariant→test mapping remains Phase 6's property-test suite.
+
+### Phase 4 — Variable Charge + Billing-Period Accounting (done)
+
+**What changed:** filled in `charge.rs`'s two Phase-3 no-op placeholders (validation steps 11-12)
+in place, without reordering anything: step 11 computes `period_index = floor((now - start_at) /
+period_seconds)` and the boundary `computed_period_start = start_at + period_index *
+period_seconds` (new `math::checked_mul_u64` helper), then derives the *effective*
+`current_period_collected` for this charge by comparing `computed_period_start` directly against
+the stored `mandate.current_period_start` — chosen over deriving a stored index from
+`current_period_start`, since the boundary is the one value the `Mandate` actually persists (see
+`docs/contract-invariants.md`'s Phase 4 section for the full reasoning). A mismatch means a full
+reset (effective collected = 0); a match means the stored total still applies. Step 12 checks
+`effective_collected + amount <= max_per_period` (checked add) else `AmountExceedsPeriodLimit`.
+Both the effective period start and effective period total are computed before any token call but
+written to `mandate.current_period_start`/`current_period_collected` only in the existing
+post-transfer accounting block — no new write path, preserving the Phase 3 rollback guarantee
+untouched. Added the completion transition immediately after the accounting increments: if
+`max_successful_charges != 0` and the just-incremented `successful_charges` equals it, `status`
+flips to `Completed` and a new `MandateCompleted` event (`events.rs`) publishes right after
+`ChargeSucceeded`, both inside the same atomic block. `ChargeSucceeded`'s `period_index` field now
+carries the authoritative step-11 value instead of Phase 3's `start_at`-only placeholder.
+
+10 new tests landed in a new `test_period.rs` module (103 total in the crate now, plus
+mock-token's own 7): two-charges-
+summing-to-cap-then-third-rejected; a single first-in-period charge exceeding the cap via a
+direct-storage-bypassed mandate (proving step 12 is independent of step 8, since
+`create_mandate` can never itself produce `max_per_period < per-charge cap`); rollover reset with
+an explicit assertion that `current_period_start` is the computed boundary and *not* `now`; the
+required boundary test (one second before a boundary still resolves to the old period and hits
+the cap; exactly at the boundary resolves to the new period and succeeds); a 5-period skip
+landing on the correct far-forward boundary (not `start_at + 1*period`); full completion
+chain (reach cap → `Completed` status → `mandate_completed` + `charge_succeeded` events in order →
+next charge rejected with `MandateCompleted`) plus its converse (`max_successful_charges == 0`
+charges past an arbitrary count while staying `Active`); a defense-in-depth test proving step 10's
+`ChargeCountExceeded` still fires for a bypassed `successful_charges >= max` + `status: Active`
+storage state that the public API can never produce; the required min-interval/rollover
+interaction test (a rollover cannot bypass the interval check); and the required rollback test —
+a charge that would have rolled the period over, with the mock token's failure-injection forcing a
+real trap, followed by a byte-for-byte storage comparison proving `current_period_start` /
+`current_period_collected` (and every other field) are untouched, then a successful retry that
+genuinely rolls over. Every successful-charge assertion in the new file also checks the contract's
+own token balance is `0` (CLAUDE.md §7 Tokens spot-check).
+
+**Rollback-with-rollover test — result, not assumption:**
+`test_period::rollover_reverts_on_failed_transfer_leaves_period_state_unchanged` forces
+`mock-token`'s `set_fail_transfers(true)` for a charge that would have rolled the mandate from
+period 0 to period 1, catches the resulting panic with `std::panic::catch_unwind`, and asserts the
+whole `Mandate` struct read back from storage is `==` to a copy saved immediately before the
+attempt. This ran and passed (see the gate output below) — the "no separate write path" decision
+was verified against a genuine failing transfer, not assumed from the code alone.
+
+**Deviation (unavoidable, correctly handled, not silent):** implementing completion surfaced a
+consequence the lead's brief didn't anticipate: once `successful_charges` reaches a non-zero
+`max_successful_charges`, the mandate completes *in the same charge that reached the cap*, so any
+following charge attempt now hits step 2's stored-`Completed` check before step 10's
+`ChargeCountExceeded` is ever reached. This makes the Phase 3 test
+`test_charge::charge_max_successful_charges_reached_rejected` — written when Phase 3 had no
+completion logic at all, so the second charge attempt used to hit step 10 directly — assert the
+wrong error. Updated its expectation from `ChargeCountExceeded` to `MandateCompleted` with an
+explanatory comment, and added a new bypass-based test
+(`test_period::charge_count_exceeded_still_enforced_via_bypassed_active_state`) so step 10 itself
+still has direct coverage rather than becoming silently untested. No invariant was weakened by
+this — `ChargeCountExceeded` remains a correct defense-in-depth error for a state the public API
+can no longer reach through normal use, which is exactly what completion is supposed to guarantee.
+
+**Judgment call:** chose direct current_period_start-boundary comparison over deriving a stored
+period index from `current_period_start / period_seconds`. Both are equivalent given
+`period_seconds`'s immutability post-creation; the boundary comparison needs no assumption about
+how `current_period_start` was produced and matches what the struct actually persists. Documented
+in `charge.rs`'s module doc and `docs/contract-invariants.md`.
+
+**Commands run (all passed):**
+```
+cargo fmt --all
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace              (103 mandate-registry + 7 mock-token tests, all pass)
+cargo build --release --target wasm32v1-none
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+**Unverified / left for later phases:** `refund` doesn't exist until Phase 5, so refund
+interactions with period/completion accounting are untested. The full CLAUDE.md §7
+invariant→test mapping remains Phase 6's property-test suite. No adversarial/malicious-token
+property testing beyond the existing single-failure-injection mock.
