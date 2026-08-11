@@ -79,3 +79,29 @@ pub struct MandateRevoked {
     pub merchant: Address,
     pub timestamp: u64,
 }
+
+/// Emitted by `charge` (Phase 3) once a payment has been durably recorded —
+/// i.e. only after `TokenClient::transfer_from` succeeded, accounting was
+/// updated, and the receipt was stored. Full field set per PLAN.md §11.
+/// Topics follow the same `mandate_id`/`payer`/`merchant` convention as the
+/// lifecycle events above so indexers can filter charges the same way they
+/// filter lifecycle transitions; `payment_id`, `charge_id`, and the rest are
+/// carried as data. `invoice_hash` only — no plaintext invoice metadata ever
+/// reaches the chain (CLAUDE.md §5, §9).
+#[contractevent]
+pub struct ChargeSucceeded {
+    #[topic]
+    pub mandate_id: BytesN<32>,
+    #[topic]
+    pub payer: Address,
+    #[topic]
+    pub merchant: Address,
+    pub payment_id: BytesN<32>,
+    pub charge_id: BytesN<32>,
+    pub asset: Address,
+    pub amount: i128,
+    pub invoice_hash: BytesN<32>,
+    pub period_index: u64,
+    pub successful_charge_number: u32,
+    pub timestamp: u64,
+}

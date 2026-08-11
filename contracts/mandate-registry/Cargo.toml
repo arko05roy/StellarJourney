@@ -12,6 +12,11 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+# Phase 3: `test_charge.rs` registers a real `MockToken` contract to exercise
+# `allowance` / `balance` / `transfer_from` end-to-end, including the
+# failure-injection path that proves the rollback invariant. Test-only —
+# mock-token is never a runtime dependency of the deployed contract.
+mock-token = { path = "../mock-token" }
 
 [features]
 testutils = ["soroban-sdk/testutils"]

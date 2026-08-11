@@ -3,19 +3,22 @@
 //! This contract is the protocol's policy authority — the backend database
 //! and relayer are never trusted over its on-chain state.
 //!
-//! Phase 2 scope (this file's current state): the payer-only mandate
-//! lifecycle — `create_mandate`, `pause_mandate`, `resume_mandate`,
-//! `revoke_mandate`, `get_mandate` — with no money movement. `charge` lands
-//! in Phase 3, `refund` in Phase 5 (see tasks/todo.md). Lifecycle business
-//! logic lives in `lifecycle.rs`; this file only declares the thin
-//! `#[contractimpl]` entrypoints that adapt it to the Soroban ABI.
+//! Phase 3 scope (this file's current state): the payer-only mandate
+//! lifecycle (`create_mandate`, `pause_mandate`, `resume_mandate`,
+//! `revoke_mandate`, `get_mandate`) plus fixed charge execution (`charge`,
+//! `get_payment`) — the first point token transfer occurs. `refund` lands in
+//! Phase 5 (see tasks/todo.md). Lifecycle business logic lives in
+//! `lifecycle.rs`, charge logic in `charge.rs`; this file only declares the
+//! thin `#[contractimpl]` entrypoints that adapt them to the Soroban ABI.
 #![no_std]
 
 // Tests run on std (via soroban-sdk's `testutils`, e.g. `Address::generate`,
-// `env.auths()`); only the `test`/`test_lifecycle` modules pull it in.
+// `env.auths()`); only the `test`/`test_lifecycle`/`test_charge` modules
+// pull it in.
 #[cfg(test)]
 extern crate std;
 
+pub mod charge;
 pub mod error;
 pub mod events;
 pub mod id;
@@ -27,12 +30,14 @@ pub mod types;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
+mod test_charge;
+#[cfg(test)]
 mod test_lifecycle;
 
 use soroban_sdk::{contract, contractimpl, BytesN, Env};
 
 use error::Error;
-use types::{Mandate, MandateInput};
+use types::{Mandate, MandateInput, PaymentReceipt};
 
 #[contract]
 pub struct MandateRegistry;
@@ -70,5 +75,23 @@ impl MandateRegistry {
     /// `Active`/`Paused` mandate without writing storage.
     pub fn get_mandate(env: Env, mandate_id: BytesN<32>) -> Result<Mandate, Error> {
         lifecycle::get_mandate(&env, &mandate_id)
+    }
+
+    /// Execute one charge. Requires `mandate.merchant.require_auth()` —
+    /// never the relayer, which has no spending authority (CLAUDE.md §11).
+    /// See `charge.rs` for the full CLAUDE.md §6 validation order.
+    pub fn charge(
+        env: Env,
+        mandate_id: BytesN<32>,
+        charge_id: BytesN<32>,
+        amount: i128,
+        invoice_hash: BytesN<32>,
+    ) -> Result<PaymentReceipt, Error> {
+        charge::charge(&env, &mandate_id, &charge_id, amount, &invoice_hash)
+    }
+
+    /// Read-only. `PaymentNotFound` if no receipt exists for `payment_id`.
+    pub fn get_payment(env: Env, payment_id: BytesN<32>) -> Result<PaymentReceipt, Error> {
+        charge::get_payment(&env, &payment_id)
     }
 }

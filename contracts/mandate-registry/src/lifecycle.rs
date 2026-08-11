@@ -33,7 +33,11 @@ use crate::{
 /// Derive the status a caller should observe right now, without persisting
 /// anything. Only `Active`/`Paused` can lazily become `Expired`; `Revoked`
 /// and `Completed` are already terminal and are returned unchanged.
-fn effective_status(mandate: &Mandate, now: u64) -> MandateStatus {
+///
+/// `pub(crate)` since Phase 3: `charge.rs` reuses this exact helper for its
+/// own step-2 status check (CLAUDE.md §6) instead of duplicating the
+/// Active/Paused-vs-expiry logic.
+pub(crate) fn effective_status(mandate: &Mandate, now: u64) -> MandateStatus {
     match mandate.status {
         MandateStatus::Active | MandateStatus::Paused if now >= mandate.expires_at => {
             MandateStatus::Expired

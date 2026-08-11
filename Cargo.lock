@@ -1012,6 +1012,7 @@ dependencies = [
 name = "mandate-registry"
 version = "0.0.0"
 dependencies = [
+ "mock-token",
  "soroban-sdk",
 ]
 

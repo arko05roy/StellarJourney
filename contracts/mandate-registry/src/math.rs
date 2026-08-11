@@ -27,3 +27,8 @@ pub fn checked_add_u64(a: u64, b: u64) -> Result<u64, Error> {
 pub fn checked_sub_u64(a: u64, b: u64) -> Result<u64, Error> {
     a.checked_sub(b).ok_or(Error::ArithmeticOverflow)
 }
+
+/// Added in Phase 3 for `successful_charges` (a `u32` counter).
+pub fn checked_add_u32(a: u32, b: u32) -> Result<u32, Error> {
+    a.checked_add(b).ok_or(Error::ArithmeticOverflow)
+}

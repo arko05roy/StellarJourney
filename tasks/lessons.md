@@ -56,3 +56,51 @@
   `soroban_sdk::vec![&env, (contract_id, expected.topics(&env), expected.data(&env))]`.
   `ContractEvents` has a `PartialEq<soroban_sdk::Vec<(Address, Vec<Val>, Val)>>`
   impl specifically for this.
+- `soroban_sdk::token::TokenClient` requires a contract that implements the
+  *exact* SEP-41 fn signatures (`allowance(from, spender) -> i128`,
+  `approve(from, spender, amount, live_until_ledger)`, `balance(id) -> i128`,
+  `transfer_from(spender, from, to, amount)`). A local test-only mock token
+  used both via its own generated `MockTokenClient` (test setup: mint,
+  approve) and via the generic `TokenClient` (from the contract under test)
+  must match these signatures on the methods the contract actually calls
+  through `TokenClient` — verified against
+  `soroban-sdk-27.0.2/src/token.rs`'s `TokenInterface` trait doc rather than
+  guessed. Note `transfer` (not `transfer_from`) takes `to: MuxedAddress` in
+  this SDK version, not `Address` — irrelevant if the contract under test
+  only ever calls `transfer_from`, but don't assume `transfer`'s signature
+  without checking if you ever add a caller for it.
+- When a contract-owned address (e.g. `env.current_contract_address()`) is
+  passed as the `spender` to another contract's `transfer_from`, that inner
+  contract's `spender.require_auth()` call succeeds automatically with *no*
+  `mock_auths` entry needed for it — Soroban auto-authorizes a contract
+  address when that contract is the direct invoker of the current call.
+  This is what makes the bounded-allowance "contract is the spender" model
+  work without the payer re-signing every charge; don't add a spurious
+  mock-auth entry for the contract's own address in tests, it isn't needed
+  and there's no address to sign it as anyway.
+- A generated `<Contract>Client<'a>` struct's `env`/`address` fields are
+  *owned* (`Env`, `Address`, both `.clone()`d in), not references — only the
+  `mock_auths`/`set_auths` slice arguments are the `'a`-lifetime-bound part.
+  Don't try to return a client with a hardcoded `'static` lifetime from a
+  test helper (`fn setup() -> (.., MockTokenClient<'static>)`) if the caller
+  will later chain `.mock_auths(&auths)` with a locally-scoped `auths`
+  array — that forces the whole client type to `'static` at construction
+  and then rejects the short-lived local borrow. Instead mirror the
+  established `fn client(f: &Fixture) -> XClient<'_>` pattern (construct a
+  fresh client from `&Fixture` fields on every call) so each call site's
+  lifetime is inferred independently.
+- `i128::checked_sub` does NOT fail on "insufficient balance" (e.g.
+  `5i128.checked_sub(10)` = `Some(-5)`, a perfectly valid non-overflowing
+  i128) — it only fails on true arithmetic overflow near `i128::MIN`. A
+  mock/test token's "insufficient balance" or "insufficient allowance"
+  panic must be an explicit `if updated < 0 { panic!(..) }` check *after*
+  `checked_sub`, not something `checked_sub` itself detects.
+- To assert storage state after an expected contract panic without ending
+  the test (`#[should_panic]` terminates the test at the panic), wrap the
+  call in `std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { .. }))`
+  and optionally swap in a no-op `std::panic::set_hook` beforehand (restore
+  the previous hook after) to silence the expected panic's stderr noise.
+  Confirmed this doesn't interfere with `mock_auths`-based calls or
+  Soroban's own trap propagation — a sub-invocation panic (e.g. a
+  test-token's forced-failure branch) unwinds through the client's
+  `try_*`/plain call exactly like an auth failure does.

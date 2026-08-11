@@ -68,17 +68,17 @@ the full rationale.
 
 **Goal:** first money movement. Full validation order.
 
-- [ ] `charge(mandate_id, charge_id, amount, invoice_hash) -> PaymentReceipt`
-- [ ] `merchant.require_auth()` — never relayer
-- [ ] Implement validation order 1–14 exactly per CLAUDE.md §6, in that sequence
-- [ ] Fixed rule: `amount == fixed` else `AmountExceedsChargeLimit` / `InvalidAmount`
-- [ ] `min_interval_seconds` check vs `last_charged_at`
-- [ ] Duplicate `charge_id` → `DuplicateCharge`
-- [ ] SAC `transfer_from(spender=contract, from=payer, to=merchant, amount)`
-- [ ] Update accounting **after** transfer only: `successful_charges`, `total_collected`, `current_period_collected`, `last_charged_at`, receipt store, event emit
-- [ ] `get_payment`
-- [ ] `charge_succeeded` event with full field set (PLAN.md §11)
-- [ ] Tests: success, wrong-merchant, before start, after expiry, too soon, duplicate charge id, paused, revoked, wrong amount, insufficient allowance, insufficient balance, transfer-failure rollback
+- [x] `charge(mandate_id, charge_id, amount, invoice_hash) -> PaymentReceipt`
+- [x] `merchant.require_auth()` — never relayer
+- [x] Implement validation order 1–14 exactly per CLAUDE.md §6, in that sequence
+- [x] Fixed rule: `amount == fixed` else `AmountExceedsChargeLimit` / `InvalidAmount`
+- [x] `min_interval_seconds` check vs `last_charged_at`
+- [x] Duplicate `charge_id` → `DuplicateCharge`
+- [x] SAC `transfer_from(spender=contract, from=payer, to=merchant, amount)`
+- [x] Update accounting **after** transfer only: `successful_charges`, `total_collected`, `current_period_collected`, `last_charged_at`, receipt store, event emit
+- [x] `get_payment`
+- [x] `charge_succeeded` event with full field set (PLAN.md §11)
+- [x] Tests: success, wrong-merchant, before start, after expiry, too soon, duplicate charge id, paused, revoked, wrong amount, insufficient allowance, insufficient balance, transfer-failure rollback
 
 **Gate:** `cargo test --workspace` w/ `mock-token` incl. a panicking/failing token variant for rollback test.
 
@@ -458,3 +458,91 @@ pnpm build
 only be reached in tests via direct storage writes, never through the public API — that becomes
 real once Phase 3/4 land. The full CLAUDE.md §7 invariant→test mapping is still Phase 6; this
 phase's `docs/contract-invariants.md` section is scoped to what Phase 2 itself introduced.
+
+### Phase 3 — Fixed Charge Execution (done)
+
+**What changed:** new `charge.rs` module (`charge`, `get_payment`) implementing CLAUDE.md §6's
+14-step validation order exactly, reusing Phase 2's `lifecycle::effective_status` (now
+`pub(crate)`) for the computed-expiry-aware status check at step 2. `AmountRule::Fixed` is fully
+enforced (`amount == fixed`, both directions — a smaller amount is a violation too);
+`AmountRule::Variable`'s per-charge cap is enforced by the same generic match arm per the lead
+decision, while `max_per_period`/period rollover (steps 11–12) are explicit documented no-ops
+reserved for Phase 4 at the correct ordinal position. Token interaction uses
+`soroban_sdk::token::TokenClient`: `allowance`/`balance` as advisory pre-flight checks (steps
+13–14, typed errors instead of an opaque trap), then `transfer_from(&contract_address,
+&mandate.payer, &mandate.merchant, &amount)` — the mandate contract is the spender, funds move
+payer→merchant directly, the contract is never `from`/`to`. Accounting
+(`successful_charges`/`total_collected`/`current_period_collected`/`last_charged_at`), the
+`UsedCharge` guard, the `PaymentReceipt`, and the new `ChargeSucceeded` event (`events.rs`, full
+PLAN.md §11 field set, `mandate_id`/`payer`/`merchant` topics matching the Phase 2 event
+convention) are all written strictly after the transfer succeeds. `math.rs` gained
+`checked_add_u32` for the `successful_charges` counter. No new error codes were needed — all of
+Phase 1's frozen 1–20 already cover every Phase 3 failure mode.
+
+`contracts/mock-token` went from a Phase-0 `ping`-only placeholder to a real minimal SEP-41/SAC-
+shaped contract: `mint` (test-only, no auth check), `balance`, `approve`, `allowance`, `transfer`,
+`transfer_from` (SAC-exact signatures on the four `TokenClient`-invoked methods), plus a
+test-only `set_fail_transfers(bool)` failure-injection switch used to prove the rollback
+invariant against a real trap. Documented in the module doc as never-to-deploy. 7 of its own unit
+tests cover mint/balance, approve/allowance, transfer_from's allowance-decrement-plus-balance-move
+happy path, insufficient-allowance/insufficient-balance panics, and the failure-injection panic.
+`mandate-registry`'s `Cargo.toml` gained a path dev-dependency on `mock-token` (test-only, never a
+runtime dependency of the deployed contract).
+
+35 new tests landed in `test_charge.rs` (93 total in the crate now, plus mock-token's own 7):
+happy-path full accounting/balance/allowance/receipt/event assertions; merchant-auth-recorded
+proof (`env.auths()` inspection, mirroring Phase 2's pattern); one rejection test per specific
+error code (nonexistent, paused, revoked, completed-via-direct-storage-write, before-start,
+zero/negative amount, over/under the fixed amount, too-soon, max-count-reached, insufficient
+allowance, insufficient balance); duplicate-charge_id-after-success (which also proves step 6
+precedes step 9 — retried immediately, well within `min_interval`, and still gets
+`DuplicateCharge` not `ChargeTooSoon`); a different-charge_id-succeeds-subject-to-interval test;
+two wrong-signer `#[should_panic]` tests (payer, and a fresh address standing in for the
+relayer — no on-chain relayer identity exists to mock, matching the Phase 2 precedent); the
+redirection test described above; two boundary tests (exactly at `start_at` succeeds, exactly at
+`min_interval` succeeds via `>=`); two bonus `Variable`-rule tests (success at the cap, rejection
+one unit over) since the per-charge-cap logic is already generic; and a `get_payment`
+not-found test.
+
+**Rollback test — result, not assumption:** `charge_transfer_failure_rolls_back_and_allows_retry_with_same_charge_id`
+sets `mock-token`'s `set_fail_transfers(true)`, calls `charge` wrapped in
+`std::panic::catch_unwind` (a small `expect_panic` helper that also silences the panic hook's
+stderr output), and after the confirmed panic asserts via direct storage reads
+(`env.as_contract(&contract_id, || storage::...)`) that `successful_charges`,
+`total_collected`, `current_period_collected` are all still `0`, `last_charged_at` is still
+`None`, `get_payment` returns `PaymentNotFound`, and `has_used_charge` is `false`. It then flips
+`set_fail_transfers(false)` and retries the identical `charge_id`, which succeeds — proving the
+replay guard was never consumed by the failed attempt. This ran and passed; the rollback
+behavior was verified, not assumed.
+
+**Judgment calls / deviations (flagged):**
+- Step 4 (`now < expires_at` → `MandateExpired`) is, in almost every reachable case, already
+  covered by step 2's `effective_status` check (an `Active`/`Paused` mandate past `expires_at`
+  computes straight to `Expired` there). Implemented anyway, at its own ordinal position, as
+  defense-in-depth per CLAUDE.md §6's literal step list — documented in `charge.rs` and
+  `docs/contract-invariants.md` as intentionally redundant, not new logic.
+- `period_index` in the `ChargeSucceeded` event is computed straight from `mandate.start_at`
+  (`floor((now - start_at) / period_seconds)`, PLAN.md §10.7's formula) rather than from
+  `current_period_start`, since Phase 3 never recomputes the latter. Informational only — no
+  enforcement depends on it yet.
+- `mock-token`'s `approve`/`transfer`/`transfer_from` all call `.require_auth()` on the relevant
+  party even though `mint` deliberately does not — matches real SEP-41 semantics for the methods
+  that matter to the invariants under test (bounded allowance, spender authorization) while
+  keeping the test-fixture-seeding path (`mint`) simple. Both are documented in the module doc.
+
+**Commands run (all passed):**
+```
+cargo fmt --all
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace              (93 mandate-registry + 7 mock-token tests, all pass)
+cargo build --release --target wasm32v1-none
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+**Unverified / left for later phases:** `max_per_period` enforcement and billing-period rollover
+are Phase 4 scope, not exercised by any Phase 3 test beyond confirming `current_period_collected`
+accumulates correctly with no cap applied yet. `refund` doesn't exist until Phase 5. The full
+CLAUDE.md §7 invariant→test mapping remains Phase 6's property-test suite.

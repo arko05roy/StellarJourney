@@ -222,3 +222,109 @@ can reconstruct mandate state from events alone. No plaintext metadata is ever e
 nothing is written to storage when expiry is merely observed, so there is no successful state
 transition to attach such an event to. A rejected call (any `Err` return) never reaches the
 `publish` call — proved by `pause_mandate_rejected_call_emits_no_event`.
+
+---
+
+## Phase 3 — Fixed Charge Execution
+
+Scope: `charge`, `get_payment` (`contracts/mandate-registry/src/charge.rs`). The first point a
+token transfer occurs. `AmountRule::Fixed` is fully enforced; `AmountRule::Variable`'s per-charge
+cap is enforced generically (same code path, step 8 below) per the Phase 3 lead decision, but
+`max_per_period` and billing-period rollover are Phase 4 — steps 11/12 below are wired at the
+correct ordinal position as documented no-ops so Phase 4 can fill them in without reordering
+anything.
+
+No new error codes were needed — all of Phase 1's frozen 1–20 cover Phase 3's failure modes.
+
+### Validation order as implemented (CLAUDE.md §6 — the order is itself a spec)
+
+| Step | Check | Error on violation |
+|------|-------|---------------------|
+| 1 | Mandate exists | `MandateNotFound` |
+| 2 | Status is `Active`, via `lifecycle::effective_status` (Phase 2's computed-expiry helper, now `pub(crate)` and reused here) | `MandatePaused` / `MandateRevoked` / `MandateCompleted` / `MandateExpired` |
+| 3 | `now >= start_at` | `ChargeBeforeStart` |
+| 4 | `now < expires_at` (defense-in-depth restatement — step 2 already rejects an expired `Active`/`Paused` mandate before this is reached in almost every case; kept as its own check at CLAUDE.md §6's exact ordinal position, not new logic) | `MandateExpired` |
+| 5 | `mandate.merchant.require_auth()` | host trap if unauthorized (never a typed error — see Authorization proof method, Phase 2) |
+| 6 | `charge_id` unused for this mandate | `DuplicateCharge` |
+| 7 | `amount > 0` | `InvalidAmount` |
+| 8 | Amount rule: `Fixed(a)` requires `amount == a` exactly (a *smaller* amount is also a violation, not only larger — CLAUDE.md §7); `Variable(max)` requires `amount <= max` | `AmountExceedsChargeLimit` |
+| 9 | `min_interval_seconds` elapsed since `last_charged_at` (skipped on the first charge, when `last_charged_at` is `None`) | `ChargeTooSoon` |
+| 10 | `max_successful_charges` not exceeded (`0` = unlimited, Phase 2 convention) | `ChargeCountExceeded` |
+| 11 | Billing-period rollover — **Phase 4 no-op**: `current_period_start` is left exactly as `create_mandate` set it | — |
+| 12 | Remaining period allowance — **Phase 4 no-op**: not checked against `max_per_period`; `current_period_collected` is still accumulated below so Phase 4 inherits a correct running total | — |
+| 13 | Token allowance sufficient (`TokenClient::allowance(payer, contract)`) — advisory pre-flight only | `InsufficientAllowance` |
+| 14 | Payer token balance sufficient (`TokenClient::balance(payer)`) — advisory pre-flight only | `InsufficientBalance` |
+| — | `TokenClient::transfer_from(spender = contract, from = payer, to = merchant, amount)` | traps the whole invocation on failure (see Rollback below) |
+| — | Accounting update, receipt store, `charge_succeeded` event | — |
+
+Steps 13/14 are explicitly advisory: `transfer_from` remains the actual authority. They exist so
+a relayer gets a typed, classifiable error instead of an opaque token-contract trap (CLAUDE.md
+§11), which matters for retry classification (permanent policy failure vs. potentially
+recoverable balance/allowance failure).
+
+### Spender / allowance model
+
+The mandate contract itself is the SEP-41 `spender` (PLAN.md §10.10): the payer approves *this
+contract's address* for a bounded allowance, and `charge` calls
+`token::TokenClient::transfer_from(&contract_address, &mandate.payer, &mandate.merchant,
+&amount)`. When the mandate contract calls another contract's `transfer_from` with
+`spender = env.current_contract_address()`, that inner `spender.require_auth()` call succeeds
+automatically under Soroban's same-invocation contract-authorization rule — the mandate contract
+is the direct invoker of that call, so no separate signature is required for it. This is exactly
+what lets a payer approve once and have every subsequent charge execute without re-signing, while
+still keeping the allowance itself bounded and payer-controlled.
+
+### Contract never holds funds
+
+`charge`'s only transfer call moves funds directly `payer -> merchant`; the contract's own
+address is never `from` or `to` in any transfer it makes, so it never holds payment funds even
+transiently (CLAUDE.md §7 Tokens). `charge_fixed_success_full_accounting_and_balances`
+(`test_charge.rs`) asserts `token.balance(&contract_id) == 0` after a successful charge.
+
+The merchant destination is read from the stored `Mandate` only — `charge`'s function signature
+has **no merchant or destination argument at all**. This is what makes relayer redirection
+structurally impossible rather than merely policy-forbidden: there is no parameter through which
+an alternate destination could even be supplied.
+`charge_cannot_redirect_funds_away_from_stored_merchant` proves an unrelated third-party address's
+balance stays at `0` after a legitimately merchant-authorized charge, while the stored merchant's
+balance increases by exactly `amount`.
+
+### Accounting-mutates-only-after-transfer, and the rollback guarantee
+
+`successful_charges`, `total_collected`, `current_period_collected`, `last_charged_at`, the
+`UsedCharge` replay guard, the `PaymentReceipt`, and the `charge_succeeded` event are all written
+strictly *after* `TokenClient::transfer_from` returns successfully — see the ordering in the
+table above. If `transfer_from` traps (a real Soroban host trap, not a returned error), the entire
+`charge` invocation traps with it, and the Soroban host discards every storage write the
+invocation attempted, leaving the mandate and its replay guards exactly as they were before the
+call.
+
+This was **verified with a real failing token, not assumed**:
+`charge_transfer_failure_rolls_back_and_allows_retry_with_same_charge_id` (`test_charge.rs`) uses
+`mock-token`'s test-only `set_fail_transfers(true)` to force a genuine `transfer_from` trap, then
+asserts, after catching the panic with `std::panic::catch_unwind`:
+
+- `successful_charges`, `total_collected`, `current_period_collected` are all still `0`.
+- `last_charged_at` is still `None`.
+- `get_payment(payment_id)` returns `PaymentNotFound` — no receipt was stored.
+- The `charge_id` is **not** marked used (`storage::has_used_charge` returns `false`) — proving a
+  legitimate retry is still possible, not permanently burned by the failed attempt.
+
+The test then flips `set_fail_transfers(false)` and retries the **same** `charge_id`, which
+succeeds — proving the guard genuinely wasn't consumed by the failed attempt.
+
+### `mock-token` (`contracts/mock-token`)
+
+A minimal SEP-41/SAC-shaped contract (`mint`, `balance`, `approve`, `allowance`, `transfer`,
+`transfer_from`) used only by `mandate-registry`'s dev-dependencies to drive real
+contract-to-contract calls in tests, rather than stubbing the token interface. Two properties
+make it explicitly test-only and documented as never-to-deploy:
+
+1. `mint` has no admin authorization check — any caller can credit any address. Fine for seeding
+   test fixtures, a critical vulnerability in a real token.
+2. `set_fail_transfers(bool)` is a failure-injection switch with no real-token equivalent; it
+   exists solely to produce the genuine `transfer_from` trap the rollback test above depends on.
+
+`transfer_from`'s allowance/balance decrements use `checked_sub` plus an explicit `< 0` check
+(not bare `checked_sub` alone) since `i128` subtraction below zero is a valid non-overflowing
+value — the insufficiency itself is a business-rule panic, not an arithmetic overflow.
