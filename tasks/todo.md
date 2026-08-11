@@ -2363,8 +2363,8 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] Commit and push the web-build fix to `main`.
 - [x] Pass CI database and Redis configuration through Turbo strict mode.
 - [x] Run the full Node test gate with CI-equivalent variables.
-- [ ] Commit and push the test-environment fix to `main`.
-- [ ] Verify the new GitHub Actions run passes.
+- [x] Commit and push the test-environment fix to `main`.
+- [x] Verify the new GitHub Actions run passes.
 
 ### Verification
 
@@ -2372,7 +2372,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] `pnpm lint`
 - [x] CI-equivalent `pnpm test`
 - [x] `git diff --check`
-- [ ] GitHub Actions `CI` succeeds on `main`
+- [x] GitHub Actions `CI` succeeds on `main`
 
 ### Files likely touched
 
@@ -2398,15 +2398,16 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
   `DATABASE_URL` before API tests.
 - Turbo dry-run reports hashed database and Redis inputs, and all 640 Node tests pass with
   CI-equivalent variables against local Postgres and Redis.
+- GitHub Actions run `30532651748` passed both Node and Rust jobs on `main`.
 
 #### Risks
 
-- The CI URL is build-time configuration only; CI does not exercise a live frontend-to-API request
-  during `next build`.
+- GitHub emits a non-blocking warning that current action releases target deprecated Node 20
+  action runtimes; the workflow itself runs Node 24 for actions and Node 22 for project commands.
 
 #### Follow-ups
 
-- Run the CI-equivalent test command and confirm the next pushed GitHub Actions run is green.
+- Upgrade GitHub action major versions when their Node 24 releases are available and stable.
 
 ---
 
