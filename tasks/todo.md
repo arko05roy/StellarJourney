@@ -2352,6 +2352,63 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 ---
 
+## Phase 22 - Main Branch Release Gate
+
+### Plan
+
+- [x] Fetch remote refs and inspect divergence from `main`.
+- [x] Run lint, typecheck, unit/integration tests, builds, E2E, Rust checks, and repository audits.
+- [x] Fix any failures at their root and rerun affected/full checks.
+- [ ] Commit the completed gate, merge production readiness into current `main`, and push.
+- [ ] Verify remote `main` contains the merge and the worktree is clean.
+
+### Verification
+
+- [x] `pnpm lint`
+- [x] `pnpm typecheck`
+- [x] `pnpm test`
+- [x] `pnpm build`
+- [x] `pnpm test:e2e`
+- [x] `pnpm test:e2e:system`
+- [x] `pnpm security:audit`
+- [x] `pnpm prisma:validate`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo clippy --workspace --all-targets -- -D warnings`
+- [x] `cargo test --workspace`
+- [x] `git diff --check`
+
+### Files likely touched
+
+- `tasks/todo.md`
+- Any files required to fix failing checks
+
+### Review
+
+#### Changed
+
+- Made Prisma validation deterministic when both supported local env files define `DATABASE_URL`.
+- Added the release gate and its verification record.
+
+#### Verified
+
+- All JavaScript/TypeScript lint, typecheck, test, build, browser E2E, security, and Prisma gates
+  pass.
+- Browser E2E passes 8/8.
+- Real Stellar testnet system E2E passes checkout, authorized charge, signed webhook, history,
+  revocation, and `MandateRevoked` protection.
+- Rust formatting, clippy with warnings denied, and all workspace tests pass.
+
+#### Risks
+
+- The production-readiness branch is 17 commits ahead of `origin/main`; remote main had no unique
+  commits when the gate began.
+
+#### Follow-ups
+
+- Merge and verify remote `main`.
+
+---
+
 ## Phase 20 - Testnet Transaction Stress Run
 
 ### Plan

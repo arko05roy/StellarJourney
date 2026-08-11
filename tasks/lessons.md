@@ -674,3 +674,8 @@ JSON.stringify(body) } : {})`) rather than passing `undefined` as a value.
   spreadsheet analysis. Keep one transaction per row with phase, hash, source
   address, verification status, and an explorer link; do not make JSON the
   only public artifact.
+- Prisma CLI loads both `<cwd>/.env` and the schema directory's `.env`, then
+  rejects duplicate variable names. When a project intentionally supports
+  both files, run schema validation from an isolated temporary cwd while
+  keeping the real schema path; never rename or delete a developer's env file
+  just to make the check pass.

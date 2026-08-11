@@ -14,7 +14,7 @@
     "test:e2e": "turbo run test:e2e",
     "test:e2e:system": "SYSTEM_E2E_TESTNET=1 pnpm --filter @paymap/web test:e2e:system",
     "security:audit": "pnpm --filter @paymap/scripts security:audit",
-    "prisma:validate": "prisma validate --schema prisma/schema.prisma",
+    "prisma:validate": "node scripts/validate-prisma.mjs",
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate:dev": "prisma migrate dev --schema prisma/schema.prisma",
     "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
