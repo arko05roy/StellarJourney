@@ -165,3 +165,49 @@
   panic occurred is what catches this, not a silent false-positive. Wire the
   flag into the new method first, and add a direct unit test for it in the
   mock contract's own test module.
+- `std::panic::catch_unwind(f)` where `f`'s captured state includes `Env`
+  (or anything holding it, e.g. a test `Fixture` struct) fails to compile
+  with a wall of "`RefCell`/`UnsafeCell` may contain interior mutability and
+  a reference may not be safely transferable across a catch_unwind
+  boundary" errors — `Env` wraps `Rc<RefCell<Host>>`-shaped internals and is
+  never `RefUnwindSafe`/`UnwindSafe`. Always wrap the closure in
+  `std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))` (not a bound
+  of `F: UnwindSafe` on the helper's generic signature — that just moves the
+  same compile error to every call site). Confirmed safe in practice for
+  this use (asserting a panic occurred, then inspecting storage read-only
+  afterward) since a caught host-level panic here never leaves `Env`'s
+  storage in a torn state the test goes on to read incorrectly.
+- Soroban's guest-to-guest cross-contract call path (`Env::invoke_contract`
+  *and* `Env::try_invoke_contract` both) always uses
+  `ContractReentryMode::Prohibited` — verified directly in
+  `soroban-env-host-27.0.1`'s `host.rs` (`default_external_call()` hard-codes
+  `Prohibited`) and `host/frame.rs:924-956` (`Prohibited` rejects a call back
+  into *any* contract already anywhere in the invocation stack, not just
+  literal self-recursion). This means a token contract cannot reenter the
+  contract that's currently calling it via the standard call mechanism, full
+  stop — no reentrancy guard needs to be hand-written in application
+  contract code for this attack shape in this SDK/protocol version. The
+  rejection surfaces as a genuine panic when the caller used the plain
+  (non-`try_`) `invoke_contract` binding (its generated wrapper calls
+  `.unwrap_infallible()` on the host result), so it propagates and aborts
+  the *entire* outer invocation, not just the reentrant sub-call.
+- `soroban-sdk`'s `Env::default()` (under `testutils`/`cfg(test)`) writes a
+  `test_snapshots/<test-name>.<N>.json` file for *every* `Env` on drop by
+  default (`EnvTestConfig::capture_snapshot_at_drop`, default `true`) —
+  fine, and this repo's existing convention, for a test module with one
+  `Env` per test function. A property/fuzz-style harness that constructs
+  hundreds of short-lived `Env`s inside a single `#[test]` fn (one per
+  random sequence) will otherwise dump hundreds of near-duplicate JSON
+  files per run (observed: 250 files, 5.5MB, for a 250-sequence suite).
+  Disable it selectively where this pattern applies via `let mut env =
+  Env::default(); env.set_config(EnvTestConfig { capture_snapshot_at_drop:
+  false });` (`soroban_sdk::testutils::EnvTestConfig`) — leave the default
+  on everywhere else so the directed, deterministic test modules keep their
+  committed snapshots.
+- `clippy::unusual_byte_groupings` (part of `-D warnings`) fires on a hex
+  literal with underscores unless every group has the same digit count —
+  `0xC0FFEE_1234_5678` fails (group of 6, then two groups of 4); a leading
+  `00` pad to make it `0x00C0_FFEE_1234_5678` (groups of 4) satisfies it. A
+  literal with *no* underscores at all (e.g. a raw 16-hex-digit constant
+  like a golden-ratio PRNG multiplier) is exempt regardless of digit count —
+  the lint only triggers once grouping is attempted and is inconsistent.

@@ -17,6 +17,11 @@ soroban-sdk = { workspace = true, features = ["testutils"] }
 # failure-injection path that proves the rollback invariant. Test-only —
 # mock-token is never a runtime dependency of the deployed contract.
 mock-token = { path = "../mock-token" }
+# Phase 6: `test_adversarial.rs` registers a real `EvilToken` contract
+# (reentrant / lying / inflated-view-reporting token) to prove CLAUDE.md §7
+# Token invariants hold against a malicious asset contract, not just a
+# well-behaved test double. Test-only, same as mock-token.
+evil-token = { path = "../evil-token" }
 
 [features]
 testutils = ["soroban-sdk/testutils"]

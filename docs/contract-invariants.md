@@ -5,8 +5,9 @@ This document will enumerate every mandatory security invariant from CLAUDE.md �
 specific test that proves it holds, including the property-based adversarial suite run
 against a malicious token contract.
 
-Status: stub, filled in Phase 6 (invariant and property tests) and kept current through
-Phase 14 (security hardening).
+Status: the full CLAUDE.md §7 / PLAN.md §18 invariant -> test mapping landed in Phase 6
+(see "Phase 6 — Invariant & Property Tests" below for the master table) and is kept current
+through Phase 14 (security hardening).
 
 ---
 
@@ -629,3 +630,117 @@ one mandate, refunds only the older payment in full, and confirms the newer paym
 `RefundedTotal` is still `0`, its receipt is unchanged, and `mandate.total_collected`/
 `successful_charges` (which never decrement on any refund, per the no-headroom-restoration rule
 above) still reflect both original charges.
+
+---
+
+## Phase 6 — Invariant & Property Tests
+
+Scope: no new contract logic. Two new test modules —
+`contracts/mandate-registry/src/test_property.rs` (a seeded, shadow-model-checked random
+action-sequence harness) and `contracts/mandate-registry/src/test_adversarial.rs` (a
+malicious-token matrix) — plus a new test-only contract, `contracts/evil-token`. This section is
+the master index the module doc at the top of this file promises: every CLAUDE.md §7 / PLAN.md
+§18 invariant mapped to the exact test(s) that prove it.
+
+### Property harness design
+
+- **PRNG**: hand-rolled `xorshift64` (`test_property.rs::Rng`), seeded, zero external fuzzing
+  dependency per the lead decision. Every sequence's seed is derived from a fixed `BASE_SEED`
+  (`property_suite_default`) or a second fixed constant (`property_suite_deep`) combined with the
+  sequence index, so any run is exactly reproducible: re-running `run_sequence(seed, ops)` with the
+  seed and op-count printed in a failing assertion's message reproduces the identical sequence.
+- **Iteration bounds**: `property_suite_default` runs 250 sequences x 20 ops (default `cargo test
+  --workspace` gate; ~5-7s wall-clock, measured well under the 2-minute budget). `property_suite_deep`
+  (`#[ignore]`d, run manually via `cargo test -p mandate-registry test_property::property_suite_deep
+  -- --ignored`) runs 3,000 sequences x 40 ops (~165s measured) for deeper manual confidence passes.
+  Neither run found an invariant violation.
+- **Shadow model** (`test_property.rs::Shadow`): a plain Rust struct mirroring exactly the fields
+  `charge`/`refund`/lifecycle transitions touch (`status`, `successful_charges`, `total_collected`,
+  `current_period_start`, `current_period_collected`, `last_charged_at`, plus a `Vec` of
+  successful-charge receipts, used charge/refund ids, and per-payment refunded totals). A family of
+  `predict_*` functions re-implements the *exact* CLAUDE.md §6 validation order for `charge` and
+  `refund`, and the lifecycle state-transition tables for `pause`/`resume`/`revoke` — including the
+  subtle, real ordering asymmetry that `charge` checks status/time *before* `merchant.require_auth()`
+  while `pause`/`resume`/`revoke`/`create_mandate` check `payer.require_auth()` *before* status. Each
+  op's predicted outcome (`Success` / `RejectedTyped(Error)` / `RejectedUntyped` for an auth
+  mismatch) is asserted against the real contract's actual outcome *before* the shadow's own state is
+  advanced, so a mismatch is caught at the exact op that produced it, not downstream.
+- **Scope decision — one mandate per sequence**: documented in `test_property.rs`'s module doc.
+  `create_mandate` does appear as a random op, but always replays the exact input used at sequence
+  setup, so it is deterministically predicted (and proven) to reject with `DuplicateMandate` without
+  corrupting the existing mandate. Multi-mandate sequences were considered and rejected as
+  low-marginal-value complexity, since every mandate-scoped rule is already exercised per-mandate.
+- **Wrong-signer handling**: a `require_auth()` mismatch is a genuine Rust panic in this SDK/test
+  harness (matching the `#[should_panic]` convention already used in `test_lifecycle.rs`/
+  `test_charge.rs`/`test_refund.rs`), not a typed `Result::Err`. Every op call is wrapped in
+  `catch_unwind` with the panic hook silenced and restored (the same pattern `tasks/lessons.md`
+  documents for post-panic storage inspection), so one wrong-signer attempt doesn't abort the whole
+  sequence.
+
+### Master invariant -> test mapping (PLAN.md §18)
+
+| # | Invariant | Proof |
+|---|-----------|-------|
+| 1 | Only the payer can create/pause/resume/revoke | `test_lifecycle.rs`'s wrong-signer `#[should_panic]` tests (payer-required ops); `test_property::run_sequence`'s per-op wrong-signer branch (~15% of pause/resume/revoke/create-replay attempts use `attacker`/`merchant` instead of `payer`, asserted `RejectedUntyped` every time across 250+3,000 sequences) |
+| 2 | Only the authorized merchant can request a charge | `test_charge.rs`'s wrong-signer `#[should_panic]` tests; `test_property::run_sequence`'s charge/refund wrong-signer branches |
+| 3 | The relayer cannot change charge amount or merchant destination | Structural, not just tested: `charge`'s signature has no merchant/destination argument at all — the merchant is read only from the stored `Mandate` (see `charge.rs` module doc). `test_charge.rs`'s success tests confirm the receipt's `merchant` always equals the mandate's stored merchant regardless of who submits the transaction envelope |
+| 4 | No successful charge can exceed `max_per_charge` | `test_charge.rs::charge_variable_amount_exceeding_cap_rejected` (and boundary siblings); `test_property::predict_charge` step 8 checked every op, boundary amounts `{cap, cap+1, cap-1}` explicitly sampled every sequence |
+| 5 | Fixed mandates charge exactly the configured amount | `test_charge.rs::charge_fixed_amount_mismatch_rejected` (both under and over); `test_property::predict_charge`'s `AmountRule::Fixed` branch (`amount != fixed` rejects both directions), exercised every sequence that rolls a `Fixed` mandate (~50%) |
+| 6 | Total charges in a period cannot exceed `max_per_period` | `test_period.rs`'s period-cap tests; `test_adversarial::period_boundary_is_exact_not_off_by_one`; `test_property::assert_invariants`'s `period_sum <= shadow.max_per_period` check, run after every op of every sequence |
+| 7 | Total collected cannot exceed the theoretical mandate maximum (when defined) | Bounded jointly by invariant 4 (per-charge cap) x invariant 13 (max charge count) x invariant 6 (period cap) — no single field caps `total_collected` directly by design (PLAN.md defines the theoretical maximum as a *derived* value, not a stored one); `test_property::assert_invariants` cross-checks `total_collected == sum(receipt amounts)` every op, and `successful_charges <= max_successful_charges` when capped, so the product of the two enforced caps is what bounds it |
+| 8 | Refunds cannot exceed the original payment amount | `test_refund.rs`'s over-refund and two-partials-summing-to-exact-total tests; `test_property::predict_refund`'s `refunded_so_far + amount > payment_amount` check, boundary amounts `{remaining, remaining+1, remaining-1}` sampled every refund op |
+| 9 | No charge before `start_at` | `test_charge.rs::charge_before_start_rejected`; `test_property::assert_invariants` asserts `r.timestamp >= shadow.start_at` for every recorded receipt, every op |
+| 10 | No charge at or after expiry | `test_charge.rs`/`test_period.rs` expiry tests; `test_property::assert_invariants` asserts `r.timestamp < shadow.expires_at` for every receipt; `test_adversarial` mandates run with a 365-day window so the property suite's bounded time horizon exercises pre-expiry behavior, expiry itself is covered by the directed tests |
+| 11 | Two charges cannot be closer than `min_interval_seconds` | `test_period.rs::min_interval_still_enforced_across_a_period_rollover`; `test_property::assert_invariants`'s `receipts.windows(2)` check, asserting every consecutive pair of recorded receipts differs by at least `min_interval_seconds`, every op of every sequence |
+| 12 | Period accounting resets exactly once per new period | `test_period.rs`'s rollover tests (skipped periods, exact boundary); `test_adversarial::period_boundary_is_exact_not_off_by_one` (one second before vs. exactly on the boundary); `test_property::period_state` mirrors the exact boundary computation and `assert_invariants` cross-checks `current_period_collected` against an independent re-derivation from the receipt list's timestamps every op |
+| 13 | Paused/revoked/completed/expired mandates cannot be charged | `test_period.rs`/`test_lifecycle.rs`'s per-status rejection tests; `test_adversarial::revoke_immediately_blocks_any_later_charge_attempt`; `test_property::predict_charge`'s status match (every non-`Active` status), exercised whenever a sequence's random walk pauses/revokes then attempts a charge |
+| 14 | A used `charge_id` can never succeed again | `test_charge.rs::charge_duplicate_charge_id_rejected`; `test_adversarial::charge_id_reuse_after_success_is_rejected_and_does_not_double_spend`; `test_property::run_sequence` reuses a prior `charge_id` in ~20% of charge ops and asserts `DuplicateCharge` every time |
+| 15 | A used `refund_id` can never succeed again | `test_refund.rs::refund_duplicate_refund_id_rejected_even_different_amount` / `..._across_different_payments`; `test_property::run_sequence` reuses a prior `refund_id` in ~20% of refund ops |
+| 16 | Failed token transfers cannot advance mandate accounting | `test_charge.rs`/`test_period.rs`/`test_refund.rs`'s rollback tests (`mock-token`'s `set_fail_transfers`); `test_adversarial::panicking_transfer_from_via_evil_token_rolls_back_cleanly`, `..._reentrant_transfer_from_*` (two variants), and `..._inflated_view_fools_preflight_but_real_transfer_failure_still_rolls_back` — all assert `successful_charges`/`total_collected`/`current_period_collected`/`last_charged_at` are byte-for-byte unchanged and no `PaymentReceipt`/used-charge-id mark exists after the trap |
+| 17 | Revocation does not erase receipts or history | `test_lifecycle.rs`/`test_refund.rs`'s revoked-mandate tests (`refund_succeeds_on_revoked_mandate` proves the receipt is still readable and refundable post-revocation); `test_property::assert_invariants`'s `revoked_receipt_count_snapshot` check, which fails the instant a revoked mandate's tracked receipt count would grow *or shrink* |
+| 18 | Successful charge count equals the number of stored successful payment receipts | `test_property::assert_invariants`: `real.successful_charges as usize == shadow.receipts.len()` asserted after every single op of every sequence (250+3,000 sequences, zero violations) — this is the harness's key oracle, called out explicitly in the Phase 6 task brief |
+| 19 | The merchant receives exactly the charged amount | `test_charge.rs`'s balance-delta assertions; `test_property::run_sequence`'s per-op token-conservation check: `(payer_after - payer_before) + (merchant_after - merchant_before) == 0`, which only holds if the merchant's gain equals the payer's loss exactly, asserted after every op |
+| 20 | The payer loses exactly the charged amount | Same token-conservation check as invariant 19 (a single delta equation proves both directions at once — CLAUDE.md doesn't distinguish separate fee handling in this MVP, no network fees are modeled by the mandate contract itself) |
+| 21 | The contract must never retain user payment funds unintentionally | `test_property::assert_invariants`: `token.balance(contract_id) == 0` asserted after every single op of every sequence — the harness's other named key oracle |
+| 22 | A malicious token contract must not cause inconsistent mandate accounting | **Partially provable — see the honest boundary below.** `test_adversarial`'s full matrix: reentrancy (both hard-abort variants), lying/silent-no-op, inflated pre-flight view vs. real transfer, and the existing panicking-token case, all via `contracts/evil-token` |
+
+### Invariant 22 — the honest boundary
+
+The mandate contract can guarantee its **own books stay internally self-consistent** with what the
+token *claimed* to do (invariants 14, 18, 21 above all hold regardless of which token is used,
+proven against `evil-token` the same way they're proven against `mock-token`). It **cannot** force a
+token that lies about its own state transitions to actually move real economic value — no on-chain
+contract can, since SEP-41 gives the caller no way to independently verify a token's internal ledger
+beyond calling the token's own (possibly lying) view functions. `test_adversarial::
+lying_token_keeps_mandate_books_self_consistent_but_moves_no_real_value` demonstrates and documents
+this precisely: after a charge against a lying token, `successful_charges`/`total_collected`/the
+stored receipt all advance exactly as if the transfer succeeded (self-consistent), while the token's
+own real ledger proves the payer's balance and the contract's allowance were never actually touched
+(no real value moved). This is not a mandate-registry bug — it is the fundamental trust boundary any
+non-custodial contract has with the asset contract it's configured to use, and merchants/consumers
+are expected to only ever configure a mandate against a trusted, audited asset (Stellar Asset
+Contracts or well-known SEP-41 tokens), never an arbitrary or unverified one.
+
+### Adversarial matrix — full results (PLAN.md §20.5)
+
+All four scenarios ran to completion; every observed outcome is reported here as-is, including the
+two that turned out to be "the host structurally forbids this" rather than "the contract defends
+against this":
+
+| Scenario | Test | Observed outcome |
+|----------|------|-------------------|
+| Reentrant `transfer_from` -> `charge`, same `charge_id` | `test_adversarial::reentrant_transfer_from_same_charge_id_aborts_whole_charge_no_state_change` | **Host-level rejection, not a contract-level defense.** Verified directly against `soroban-env-host-27.0.1` source (`host/frame.rs:924-956`, `host.rs`'s `default_external_call()`): every guest-to-guest call via the standard `invoke_contract`/`try_invoke_contract` path uses `ContractReentryMode::Prohibited`, which rejects *any* call back into a contract already on the invocation stack (`ScErrorType::Context`/`InvalidAction`, "Contract re-entry is not allowed") — regardless of `charge_id`. Because `evil-token` uses the plain (non-`try_`) `invoke_contract` binding, that rejection unwinds as a genuine panic all the way back out through `transfer_from`, through the outer `charge`'s own `TokenClient::transfer_from` call, and out of the whole invocation — so the reentrant attempt *and* the legitimate first-order charge both roll back together. No mandate-registry logic ran twice; no partial mutation exists to find. |
+| Reentrant `transfer_from` -> `charge`, *different* `charge_id` | `test_adversarial::reentrant_transfer_from_different_charge_id_aborts_whole_charge_no_state_change` | Identical outcome to the above — proves the rejection is about the **contract already being on the call stack**, not about which `charge_id` the reentrant call uses. Neither the outer nor the reentrant `charge_id` is ever marked used. |
+| Lying `transfer_from`/`transfer` (returns success, moves nothing) | `test_adversarial::lying_token_keeps_mandate_books_self_consistent_but_moves_no_real_value` | Contract accounting advances exactly as if the transfer succeeded (self-consistent per invariant 18); token's real ledger proves no value moved. See "Invariant 22 — the honest boundary" above. |
+| Inconsistent balance/allowance reporting (pre-flight view inflated to `i128::MAX`, real transfer uses the genuine, insufficient ledger) | `test_adversarial::inflated_view_fools_preflight_but_real_transfer_failure_still_rolls_back` | The advisory pre-flight checks (`charge.rs` steps 13/14) are fooled and let the call proceed — exactly as documented, they are advisory only. The *real* `transfer_from` call is what actually protects the mandate: it traps on genuine insufficient balance, and the "accounting mutates only after the transfer succeeds" discipline (not the pre-flight check) is what leaves `successful_charges`/`total_collected` untouched. |
+| Panicking token (`evil-token`'s own `set_fail_transfers`, parity with `mock-token`) | `test_adversarial::panicking_transfer_from_via_evil_token_rolls_back_cleanly` | Clean rollback, then a successful retry with the identical `charge_id` once the flag is cleared — same proof `test_charge.rs`/`test_period.rs`/`test_refund.rs` already established against `mock-token`, now also confirmed against a token built for this specific test. |
+| Charge-id reuse after a successful charge | `test_adversarial::charge_id_reuse_after_success_is_rejected_and_does_not_double_spend` | Rejected with `DuplicateCharge`; merchant balance and mandate accounting provably unchanged by the replay attempt. |
+| Charge-vs-revoke ordering | `test_adversarial::revoke_immediately_blocks_any_later_charge_attempt` | A charge attempted immediately after a successful `revoke_mandate` in the same test (no concurrency needed to demonstrate this — the contract re-validates status from storage on every call, so there is no window where a stale in-memory status could be exploited) is rejected with `MandateRevoked`; the prior legitimate receipt survives untouched. |
+| Period-boundary race | `test_adversarial::period_boundary_is_exact_not_off_by_one` | One second before the boundary: rejected (`AmountExceedsPeriodLimit`, old period's headroom already consumed). Exactly on the boundary: succeeds (fresh period, full headroom). Confirms the boundary comparison in `charge.rs` (`computed_period_start != current_period_start`) is exact in both directions, not off-by-one either way. |
+
+### Result: no invariant violations found
+
+Across the full default gate (250 property sequences x 20 ops), the deep manual run (3,000
+sequences x 40 ops), and all 8 adversarial tests, **zero invariant violations were found**. Every
+predicted-vs-actual mismatch check (the property harness's core assertion) passed on every op of
+every sequence in both runs.

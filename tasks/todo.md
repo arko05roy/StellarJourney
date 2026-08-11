@@ -134,13 +134,13 @@ the full rationale.
 
 **Goal:** prove §7 holds under random action sequences.
 
-- [ ] Property harness: random ops `create|charge|pause|resume|revoke|refund|advance_time`
-- [ ] Assert after every op: all 22 PLAN.md §18 invariants
-- [ ] Key oracle: `successful_charges == count(stored receipts)`
-- [ ] Key oracle: `sum(receipts in period) <= max_per_period`
-- [ ] Key oracle: contract token balance == 0 after every op
-- [ ] Adversarial: malicious token contract (reentrant `transfer_from`, lying return, balance drain)
-- [ ] Write `docs/contract-invariants.md` — every invariant → the test that proves it
+- [x] Property harness: random ops `create|charge|pause|resume|revoke|refund|advance_time`
+- [x] Assert after every op: all 22 PLAN.md §18 invariants
+- [x] Key oracle: `successful_charges == count(stored receipts)`
+- [x] Key oracle: `sum(receipts in period) <= max_per_period`
+- [x] Key oracle: contract token balance == 0 after every op
+- [x] Adversarial: malicious token contract (reentrant `transfer_from`, lying return, balance drain)
+- [x] Write `docs/contract-invariants.md` — every invariant → the test that proves it
 
 **Gate:** `cargo test --workspace` incl. property suite.
 
@@ -748,3 +748,82 @@ Phase 6's randomized property-test suite (`create → charge → pause → resum
 revoke` sequences asserting all 22 PLAN.md §18 invariants hold after every op). No
 adversarial/malicious-token property testing of `refund` beyond the existing single-failure-
 injection mock.
+
+### Phase 6 — Invariant & Property Tests (done)
+
+**What changed:** no contract logic changed — this phase is pure test infrastructure. Two new
+test modules in `mandate-registry`: `test_property.rs` (a seeded random-action-sequence harness
+with a shadow model) and `test_adversarial.rs` (a malicious-token matrix), plus one new test-only
+contract crate, `contracts/evil-token` (SEP-41-shaped, with `set_fail_transfers`,
+`set_lying_mode`, `set_inflated_view_mode`, and `set_reentry_target` toggles). `docs/contract-
+invariants.md` gained a full Phase 6 section: the property harness design, a master table mapping
+every one of PLAN.md §18's 22 invariants to the test(s) that prove it, the full adversarial-matrix
+results table, and an explicit "honest boundary" note for invariant 22.
+
+**Property harness:** hand-rolled seeded `xorshift64` PRNG (no fuzzing dependency, per the lead
+decision) drives 250 sequences x 20 ops by default (~5-7s, part of `cargo test --workspace`) and
+a `#[ignore]`d deep run of 3,000 sequences x 40 ops (~165s, manual invocation only) at
+`test_property::property_suite_deep`. Every sequence maintains a plain-Rust shadow model that
+re-implements the *exact* CLAUDE.md §6 validation order for `charge`/`refund` and the lifecycle
+transition tables for `pause`/`resume`/`revoke` (including the real ordering asymmetry: `charge`
+checks status/time before `merchant.require_auth()`, while the lifecycle ops check
+`payer.require_auth()` first) — every op's predicted outcome is asserted against the real
+contract's actual outcome, then every PLAN.md §18 invariant is re-checked against live on-chain
+state. One mandate per sequence, by design (documented scope decision, see `test_property.rs`'s
+module doc) — a replayed `create_mandate` is still exercised mid-sequence and proven to always
+reject with `DuplicateMandate` without corrupting the existing mandate.
+
+**Adversarial matrix — the key finding:** built `contracts/evil-token` and proved, against
+`soroban-env-host-27.0.1`'s own source, that a token attempting reentrancy via the standard
+`invoke_contract` path (`transfer_from` calling back into `charge`, both same- and
+different-`charge_id` variants) is rejected **by the host itself**
+(`ContractReentryMode::Prohibited`, "Contract re-entry is not allowed") before any contract logic
+runs a second time — the rejection unwinds and aborts the *entire* outer `charge` invocation with
+it, so there is no partial-mutation window to find. This is a structural host guarantee, not
+something `mandate-registry` had to implement. Also proved and documented honestly: a lying token
+(`transfer_from` reports success, moves nothing) leaves the mandate's *own* books
+self-consistent but cannot be prevented from lying about real value movement — the fundamental,
+unavoidable trust boundary with the configured asset contract (PLAN.md §18 invariant 22's honest
+limit, written up explicitly in `docs/contract-invariants.md` rather than overclaimed). An
+inflated pre-flight view (`balance`/`allowance` report `i128::MAX`) fools the advisory steps
+13/14 checks but the *real* transfer's own failure (and the accounting-mutates-only-after
+discipline) still rolls back cleanly. Plus: charge-id reuse, charge-vs-revoke ordering, and an
+exact (not off-by-one either direction) period-boundary test.
+
+**Result: zero invariant violations found** across the default gate, the deep manual run, and the
+full adversarial matrix (8 tests). Nothing was loosened or worked around to make anything pass.
+
+**Repo-hygiene deviation (flagged):** `soroban-sdk`'s default `EnvTestConfig` writes a
+`test_snapshots/*.json` file on every `Env` drop in a test — appropriate (and this repo's existing
+convention, already committed for every other test module) for a handful of deterministic
+scenarios, disproportionate for the property harness's hundreds of throwaway randomized `Env`s per
+run (250 for the default suite alone, 5.5MB observed before disabling it). Disabled snapshot
+capture specifically inside `test_property.rs`'s `run_sequence` via
+`env.set_config(EnvTestConfig { capture_snapshot_at_drop: false })`; every other test module
+(including `test_adversarial.rs`) keeps the default and its snapshots are committed as usual.
+
+**Commands run (all passed):**
+```
+cargo fmt --all
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace              (148 tests: 136 mandate-registry [1 ignored: the deep
+                                      property run] + 9 mock-token + 3 evil-token; ~8-11s)
+cargo build --release --target wasm32v1-none
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+Property suite measured separately: `property_suite_default` ~5-7s (part of the run above);
+`property_suite_deep` (`--ignored`, manual) ~165s for 3,000 sequences x 40 ops.
+
+**Unverified / left for later phases:** a "soft" reentrancy variant (token catches the host's
+rejection via `try_invoke_contract` and silently proceeds with the real transfer instead of
+letting the panic propagate) was considered and deliberately not built — it requires a generic
+error-conversion bound (`E: TryFrom<Error>, E::Error: Into<InvokeError>`) that's genuinely
+uncertain to type-check without a contract-specific error type, and the "hard" variant already
+answers the core question (Soroban's reentry guard is unconditional regardless of which call path
+a token uses) with proportionate confidence. No true multi-thread/concurrent-submission test
+exists (Soroban's local sandbox test environment is single-threaded) — "two workers submit the
+same charge concurrently" is instead covered structurally (replay guards are storage-checked, not
+in-memory-cached) and will get a real concurrency proof once Phase 9's relayer lands.

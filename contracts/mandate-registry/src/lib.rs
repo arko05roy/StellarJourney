@@ -12,6 +12,12 @@
 //! `lifecycle.rs`, charge logic in `charge.rs`, refund logic in `refund.rs`;
 //! this file only declares the thin `#[contractimpl]` entrypoints that adapt
 //! them to the Soroban ABI.
+//!
+//! Phase 6 adds no new public methods — it adds `test_property.rs` (a
+//! seeded, shadow-model-checked random-sequence harness) and
+//! `test_adversarial.rs` (malicious-token scenarios) as the security bar
+//! before Phase 7. See `docs/contract-invariants.md` for the full PLAN.md
+//! §18 invariant -> test mapping.
 #![no_std]
 
 // Tests run on std (via soroban-sdk's `testutils`, e.g. `Address::generate`,
@@ -33,11 +39,15 @@ pub mod types;
 #[cfg(test)]
 mod test;
 #[cfg(test)]
+mod test_adversarial;
+#[cfg(test)]
 mod test_charge;
 #[cfg(test)]
 mod test_lifecycle;
 #[cfg(test)]
 mod test_period;
+#[cfg(test)]
+mod test_property;
 #[cfg(test)]
 mod test_refund;
 
