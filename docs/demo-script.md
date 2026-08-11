@@ -5,12 +5,12 @@ consumer wallet authorization and mandate creation, a scheduled charge executed 
 over-limit charge rejection, immediate revocation, and a subsequently rejected charge attempt —
 each step with the exact command or UI action to reproduce it on a clean machine.
 
-Status: Scenes 1-2 are reproducible today (Phase 8 merchant API, Phase 10 consumer checkout).
-Scenes 3-5 need Phase 11 (consumer dashboard — "Cancel autopay") and Phase 12 (webhooks) before
-they have a UI; the underlying charge/relayer/revocation mechanics they narrate are already proven
-end-to-end on real testnet (`scripts/run-relayer-testnet-demo.ts`, `docs/architecture.md`'s Phase 9
-section) — only the polished demo narration and the merchant/consumer dashboards around them are
-still stubbed. Full polish pass is Phase 15.
+Status: Scenes 1-2 and 5 are reproducible today (Phase 8 merchant API, Phase 10 consumer checkout,
+Phase 11 consumer dashboard). Scenes 3-4 still need Phase 12 (merchant-facing charge/failed-collection
+UI) before they have a UI; the underlying charge/relayer/revocation mechanics they narrate are
+already proven end-to-end on real testnet (`scripts/run-relayer-testnet-demo.ts`,
+`docs/architecture.md`'s Phase 9 section) — only the merchant dashboard around them is still
+stubbed. Full polish pass is Phase 15.
 
 ---
 
@@ -95,11 +95,33 @@ token transfer.
 
 ## Scene 5 — User control
 
-*(Consumer dashboard "Cancel autopay" UI lands in Phase 11; `revoke_mandate` + the post-revoke
-`MandateRevoked` charge rejection are already proven by the Phase 2/3 contract test suites.)*
+Open `/dashboard` (`apps/web`, Phase 11) with the wallet that authorized Scene 2's mandate.
+Before doing anything, the dashboard already shows every mandate field CLAUDE.md §13 requires,
+read live from the contract, never the database: merchant, asset, amount/maximum, billing
+frequency, next eligible charge date, period usage (as a meter), expiry, and status.
 
-The user taps **Cancel autopay**; a later valid-looking $10 charge is rejected because the mandate
-is revoked.
+Steps:
+
+1. From the **Upcoming** or **Active** tab, click **Pause** on the CloudBox mandate — a single
+   payer-signed `pause_mandate` call. The status badge flips to "Paused" and the mandate moves to
+   the **Paused & ended** tab (no more eligible-charge date while paused).
+2. Click **Resume** — `resume_mandate`, payer-signed, moves back to **Active**/**Upcoming**.
+3. Click **Cancel autopay**. The confirmation dialog states plainly this is immediate, permanent,
+   and needs no merchant approval (PLAN.md §10.9). Confirming signs `revoke_mandate` — the mandate
+   is cancelled the instant that transaction confirms, full stop.
+4. The dashboard immediately follows up with the allowance-to-zero prompt: "Set your spending
+   approval to zero?", explaining that a lingering token allowance is a standing risk even though
+   the cancelled mandate itself now blocks every future charge. Clicking **Set to zero** signs one
+   more `approve(amount: 0)` transaction. Declining (**Skip for now**) is equally valid — the
+   mandate is already safely cancelled either way.
+5. Back on **Paused & ended**, the mandate now shows "Cancelled" with no lifecycle controls left,
+   just "View history".
+6. The merchant then attempts a later, otherwise-valid $10 charge against the same mandate id
+   (Phase 9's relayer pipeline, or a direct `charge` call) — rejected with `MandateRevoked` before
+   any token transfer, proven by the Phase 2/3 contract test suites. On the consumer's **Payment
+   history** tab, this shows up not as a scary error but as a blocked attempt: "The merchant tried
+   to charge after you cancelled this automatic payment, so we blocked it" — proof the protection
+   works, with the machine code (`MandateRevoked`) shown alongside for support.
 
 ## Final message
 

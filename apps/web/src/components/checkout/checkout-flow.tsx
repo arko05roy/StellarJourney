@@ -21,7 +21,7 @@ import { toDisplayError } from "@/lib/errors";
 import { randomHexId32, sha256Hex } from "@/lib/ids";
 import { linkMandateToCheckoutSession, type PublicCheckoutSession } from "@/lib/api";
 import { computeBoundedAllowance, computeMaxExposure, deriveMandateTerms } from "@/lib/mandate-terms";
-import { formatAmount } from "@/lib/format";
+import { formatAmount, formatAssetSymbol } from "@/lib/format";
 import type { ChainGateway } from "@/lib/chain-gateway";
 import type { WalletAdapter } from "@/lib/wallet";
 import type { MandateInput } from "@paymap/contract-client";
@@ -45,7 +45,7 @@ export function CheckoutFlow({ session, wallet, gateway, mandateContractId, nowU
   const terms = deriveMandateTerms(session.product, nowUnixSeconds);
   const maxExposure = computeMaxExposure(terms);
   const allowance = computeBoundedAllowance(maxExposure);
-  const assetSymbol = productAssetSymbol(terms.assetAddress);
+  const assetSymbol = formatAssetSymbol(terms.assetAddress);
 
   const handleConnect = useCallback(async () => {
     dispatch({ type: "CONNECT_START" });
@@ -244,9 +244,4 @@ export function CheckoutFlow({ session, wallet, gateway, mandateContractId, nowU
       )}
     </div>
   );
-}
-
-/** The API does not (yet) carry a human asset symbol/code — derived here as a short, honest placeholder from the contract address until Phase 12's asset registry work lands. Never hides the full address: `TermsList` always shows it alongside. */
-function productAssetSymbol(assetAddress: string): string {
-  return `Asset ${assetAddress.slice(0, 4)}…${assetAddress.slice(-4)}`;
 }

@@ -20,6 +20,7 @@ import mandatesRoutes from "./routes/mandates.js";
 import chargesRoutes from "./routes/charges.js";
 import paymentsRoutes from "./routes/payments.js";
 import webhookEndpointsRoutes from "./routes/webhook-endpoints.js";
+import consumerRoutes from "./routes/consumer.js";
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -114,6 +115,7 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
       await v1.register(chargesRoutes);
       await v1.register(paymentsRoutes);
       await v1.register(webhookEndpointsRoutes);
+      await v1.register(consumerRoutes);
     },
     { prefix: "/v1" },
   );

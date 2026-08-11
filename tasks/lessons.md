@@ -485,3 +485,46 @@
   test — `app.inject()`-based backend tests never exercise the browser's
   same-origin policy at all, so this class of bug is invisible to them by
   construction.
+- `@testing-library/react`'s auto-cleanup between tests (unmounting whatever `render()` left in the
+  DOM) only self-registers when a *global* `afterEach` function exists (`typeof afterEach ===
+  'function'` check in its own source) - this requires `vitest.config.ts`'s `test.globals: true`.
+  This repo's `apps/web/vitest.config.ts` doesn't set that (test files import
+  `describe`/`it`/`afterEach` explicitly from `"vitest"` instead), so cleanup silently never ran:
+  every `it()` in a multi-test file kept accumulating unmounted DOM from every prior test in that
+  same file. Single-test-per-assertion-target files (or files whose later tests happen to query a
+  testid the earlier test's final render state no longer contains) can go a long time without this
+  ever causing a visible failure - it only surfaced once a new test file
+  (`mandate-card.test.tsx`) had several tests all rendering something with the same testid
+  (`pause-button`, `mandate-status-badge`, ...), which turned into `getByTestId`'s strict-mode
+  "multiple elements found" error, not an obviously-cleanup-shaped symptom. Fix: add
+  `afterEach(cleanup)` explicitly in `vitest.setup.ts` (`import { afterEach } from "vitest"; import
+  { cleanup } from "@testing-library/react";`) - one central fix, not a per-test-file workaround,
+  and it silently benefited every pre-existing component test file too once added.
+- Also invalid-but-silently-transform-failing JSX: a prop written as
+  `mandateId="a".repeat(64)` (missing the `{}` around a template/expression, i.e. string-literal
+  syntax followed by a method call outside braces) is a parse error, not a type error - Vitest's
+  esbuild-based transform reports it as a bare "Transform failed with 1 error" with no useful
+  pointer to the exact prop, at the *file* level, so every test in that file fails together. Always
+  wrap any non-bare-string JSX attribute value in `{}` (`mandateId={"a".repeat(64)}`), and if a test
+  file fails with an opaque transform error before any test even starts, grep it for `="` followed by
+  a method call rather than assuming a logic bug.
+- Playwright's `getByTestId`/`locator` matching is a plain CSS `[data-testid^="..."]` prefix/
+  substring check, not testid-aware - a real testid like `mandate-card-fields` or
+  `mandate-card-skeleton` will match a `[data-testid^="mandate-card-"]` locator too, and a
+  `expect(locator).toBeVisible()` against a locator that resolves to 2+ elements throws a hard
+  "strict mode violation" immediately (not retried away like a normal not-yet-visible assertion
+  would be). When multiple sibling components in the same feature share a common testid prefix by
+  coincidence (a list-item card, its own internal "fields" sub-region, and its loading-skeleton
+  stand-in all starting with the same word), give the actual interactive/target element a longer,
+  more specific prefix (`mandate-card-item-<id>`) rather than trying to retrofit exclusions into
+  every consuming locator.
+- A Next.js dashboard/list page whose cards filter by *live, derived* status (e.g. "Upcoming"/
+  "Active" tabs showing only `status === "Active"` mandates) will make a just-paused or just-
+  revoked item disappear from the tab the user is looking at the instant the action confirms, since
+  the live re-read immediately reflects the new status and the filter is re-evaluated on every
+  render - there is no transitional "still shown here with an updated badge" moment unless the UI
+  deliberately freezes the list's membership independent of live status. This is easy to miss when
+  hand-writing an E2E flow that assumes "click pause, see the badge change in place" - the correct
+  assertion is "the card leaves this tab, and reappears under the tab that now matches its new
+  status," which is also arguably the more honest UX for a nav split that already has a dedicated
+  "Paused & ended" tab.

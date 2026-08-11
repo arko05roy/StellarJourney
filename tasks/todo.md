@@ -213,11 +213,11 @@ the full rationale.
 
 ## Phase 11 — Consumer Dashboard
 
-- [ ] Nav: Upcoming / Active / History / Paused & Ended / Settings
-- [ ] Mandate card: merchant, asset, amount or max, frequency, next eligible date, period usage, expiry, status
-- [ ] Pause / Resume / **Cancel autopay** (revoke) + allowance-to-zero prompt
-- [ ] Payment history + failed attempts with human-readable reason
-- [ ] Read from contract state, not DB, for status display
+- [x] Nav: Upcoming / Active / History / Paused & Ended / Settings
+- [x] Mandate card: merchant, asset, amount or max, frequency, next eligible date, period usage, expiry, status
+- [x] Pause / Resume / **Cancel autopay** (revoke) + allowance-to-zero prompt
+- [x] Payment history + failed attempts with human-readable reason
+- [x] Read from contract state, not DB, for status display
 
 **Gate:** `pnpm test`, `pnpm test:e2e`. New user completes full flow with zero CLI.
 
@@ -1419,3 +1419,143 @@ the brief ("a real testnet run is not required here — Phase 13 owns the full e
 change zero-confirm-set-new sequence is proven by a mocked-gateway component test, not against a
 real SAC on testnet. `GET /v1/checkout-sessions/:id/public`'s lack of a route-specific rate limit
 (beyond the app's global 1000/min/IP default) is flagged in `docs/threat-model.md` for Phase 14.
+
+### Phase 11 — Consumer Dashboard (done)
+
+**What changed:** built `apps/web`'s consumer dashboard (`/dashboard`) end to end. Invoked the
+`shadcn` skill (added `tabs`/`progress`/`tooltip` via `npx shadcn@latest add` on top of Phase 10's
+`base-nova`/neutral/lucide setup; removed `tooltip.tsx` again once it turned out unused — no
+dead-code left behind) and `design-taste-frontend` (declared upfront, per its own Section 13, that
+a dashboard is out of scope for its page-composition rules; applied only the cross-cutting quality
+bars — no AI-purple/glow, one accent color, dark mode, WCAG AA contrast/focus, real empty/loading/
+error states, restrained motion, icon-library discipline).
+
+**Two data sources, one explicit trust hierarchy (CLAUDE.md §2):** a new unauthenticated
+`apps/api/src/routes/consumer.ts` (`GET /v1/consumer/mandates`, `GET /v1/consumer/payments`, both
+by `payerAddress`) is *discovery/enrichment only* — merchant display names, asset decimals (via the
+existing `resolveAssetDecimalsForMandate`), a `cachedStatus` field deliberately named to signal
+"last known, not authoritative". Every field an actual mandate card renders (status, amounts,
+period usage, next eligible date) instead comes from a live `get_mandate` simulation call run
+directly from the browser (`lib/mandate-gateway.ts`), one per discovered mandate id. Required one
+piece of backend wiring discovery depended on: `checkout-sessions.ts`'s `/mandate` link endpoint
+(Phase 10) now also upserts `MandateIndex` with the verified payer address — previously only the
+merchant-authenticated `GET /v1/mandates/:id` ever wrote that table, and a payer's own browser
+never calls that route, so a newly-created mandate would otherwise never be discoverable here. 8 new
+`apps/api` tests (`consumer.test.ts`) + 1 new `checkout-sessions.test.ts` assertion.
+
+**New pure/tested logic, `apps/web/src/lib`:**
+- `mandate-status.ts` — `deriveEffectiveStatus` (mirrors the contract's lazy-expiry rule, defense
+  in depth over an already-computed live read), `computeEffectivePeriodUsage` (the period-usage
+  meter uses the *effective* period at "now", not raw stored fields, so an idle mandate never shows
+  a stale "full" reading), `computeNextEligibleChargeDate` (the one PLAN.md §16.1 card field with no
+  contract getter at all — two independent gates: the interval floor, and a period-allowance check
+  that rolls forward to the next boundary when exhausted; exact for `Fixed`, conservative
+  fully-exhausted-only for `Variable` since the next amount is the merchant's future choice),
+  `deriveControlAvailability` (Pause/Resume/Cancel-autopay gating mirroring the contract's legal-
+  transition table). 22 tests.
+- `failure-reasons.ts` — decodes a `ChargeRequest.failureCode` (all 24 frozen contract error codes
+  from `packages/stellar`'s own table, plus the relayer's 3 infra-transient reasons) into
+  consumer-facing copy framed as *protection working*, not a scary error — distinct from
+  `lib/errors.ts`'s checkout-flow copy, which frames the payer's own action failing. 5 tests incl. an
+  exhaustive canary over the frozen 24-code table.
+- `revoke-flow.ts` — the "cancel autopay" state machine (discriminated union, mirrors
+  `checkout-state.ts`'s pattern): revoke → check allowance → (`allowance-prompt` if non-zero,
+  straight to `complete` if already zero) → zero-or-skip → `complete`. Declining the prompt is a
+  first-class outcome, not an error path. 8 tests.
+- `mandate-gateway.ts` — a second, dashboard-scoped gateway alongside Phase 10's `ChainGateway`
+  (`getMandate` + payer-signed `pauseMandate`/`resumeMandate`/`revokeMandate`, all via the same
+  `submitAsInvoker` flow as `create_mandate`, plus the same `approve`/`queryAllowance` primitives
+  reused for the allowance-zero prompt). Kept separate rather than merged into `ChainGateway` since
+  the two components' signing lifetimes genuinely differ (once-per-session vs. long-lived
+  singleton).
+
+**Components, `apps/web/src/components/dashboard`:** `dashboard-shell` (orchestration: wallet
+connect, per-mandate live-read state keyed by id so one mandate's refresh never reloads the whole
+list, tab filtering, action dispatch), `dashboard-nav` (shadcn `Tabs`), `mandate-card` (every
+PLAN.md §16.1 field + gated controls), `status-badge`, `period-usage-meter` (shadcn `Progress`),
+`cancel-autopay-dialog` (drives the revoke-flow reducer's actual gateway calls from a `useEffect`
+keyed on `state.phase` alone — several parent props are fresh literals every render, and the effect
+must fire exactly once per phase transition or it would re-submit an already-signed transaction),
+`payment-history-list` (successes + failed attempts, each failure decoded via `describeFailureReason`),
+`wallet-gate`/`empty-state`/`loading-skeleton` (real, explanatory states — never a bare spinner or
+"no results"), `settings-panel`.
+
+**Revoke → allowance-zero flow, end to end:** confirm → `revoke_mandate` (payer-signed, immediate
+and unconditional per PLAN.md §10.9 — the parent refreshes that mandate's live status the instant
+this confirms, before the allowance step even starts) → query current allowance → if non-zero,
+prompt "Set your spending approval to zero?" with plain-language reasoning (a lingering allowance is
+a standing risk even though the mandate itself now blocks charges) → `approve(amount: 0)` or
+**Skip for now** (both reach a `complete` summary; skipping is never treated as an error). Proven by
+3 `cancel-autopay-dialog.test.tsx` component tests (mocked gateway) and the Playwright flow.
+
+**Wallet-rejection / stale-state handling (explicit task requirement):** every `pause`/`resume`
+failure both surfaces an inline `ErrorBanner` on the card *and* triggers `refreshMandate` in a
+`finally` block — if the mandate's on-chain state changed underneath the user (e.g. it was already
+revoked elsewhere), the card's controls re-derive from the fresh read on the next render rather than
+staying stale and clickable into a doomed retry.
+
+**Test count:** 47 new `apps/web` unit/component tests (22 `mandate-status`, 8 `revoke-flow`, 5
+`failure-reasons`, 9 `mandate-card`, 3 `cancel-autopay-dialog`) — 85 total in `apps/web` now
+(up from 38). 3 new Playwright tests in `e2e/dashboard.spec.ts` (list → pause → resume → cancel
+autopay → allowance-zero prompt, spanning the Upcoming/Paused & ended tab split; payment history
+with a failed-attempt reason; keyboard-only nav + focus-visible) — 6 total in `apps/web` now.
+`lib/e2e-stub-fixtures.ts` is the single source of truth for the one fixture mandate id/merchant/
+asset shared between the stub `MandateGateway` ("chain") and `e2e/fixtures/mock-api-server.mjs`'s
+new consumer routes ("database"); the stub gateway also seeds a realistic non-zero starting
+allowance so the E2E test exercises the real prompt, not just its already-zero skip path. 8 new
+`apps/api` tests (`consumer.test.ts`) + 1 updated `checkout-sessions.test.ts` — 161 total in
+`apps/api` now (up from 152).
+
+**Bug found and fixed along the way (not a Phase 11 feature, a latent Phase 10 gap):**
+`apps/web/vitest.setup.ts` never registered `@testing-library/react`'s auto-cleanup — it only
+self-registers when a global `afterEach` exists, which requires `vitest.config.ts`'s
+`test.globals: true` (not set here; test files import `afterEach`/`describe`/`it` explicitly from
+`"vitest"` instead). Every multi-`it()` test file was silently accumulating unmounted DOM across
+tests within the same file; it only surfaced once `mandate-card.test.tsx` rendered enough
+same-testid elements across tests to trip `getByTestId`'s strict-mode "multiple elements" check.
+Fixed once, centrally, in `vitest.setup.ts` (`afterEach(cleanup)`) — benefits every existing and
+future component test file, not just the new ones. See `tasks/lessons.md`.
+
+**Commands run (all passed):**
+```
+docker compose up -d
+pnpm install
+pnpm lint                            (16/16 tasks)
+pnpm typecheck                       (16/16 tasks)
+pnpm build                           (10/10 tasks — apps/web: next build succeeds, /dashboard
+                                       route 36.6 kB / 326 kB First Load JS)
+pnpm test                            (16/16 tasks; apps/api: 161 tests incl. 8 new;
+                                       apps/web: 85 tests incl. 47 new; apps/relayer: 56, unchanged)
+pnpm test:e2e                        (apps/web: 6/6 Playwright tests, 3 new)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-token,
+                                       unchanged — no contract touched this phase)
+```
+
+**Deviations flagged:**
+- "Upcoming" and "Active" currently share the same underlying filter (`status === "Active"`,
+  different sort — soonest next-eligible-date vs. merchant name) rather than being two visibly
+  distinct sets. PLAN.md §16.1 lists them as separate nav items without further specification; this
+  is a defensible reading (an "at a glance, what's coming up" view vs. a "manage everything active"
+  view) but is a judgment call, not a spec-given distinction — flagged for lead confirmation.
+- A paused or just-revoked mandate immediately leaves the Upcoming/Active tab and moves to
+  "Paused & ended" (rather than staying visible in place with just its badge updated). This matches
+  PLAN.md §16.1's nav split literally and is asserted by the Playwright test, but is a real UX
+  choice (some dashboards keep the just-acted-on row in place for continuity) worth a design review.
+- `formatAssetSymbol`'s short-address placeholder (carried over from Phase 10, now also used here
+  and in the cancel-autopay dialog) still has no real asset code/symbol backing it — unchanged
+  Phase 12 deferral, not new to this phase.
+- `nowUnixSeconds` (used for lazy-expiry/period-usage/next-eligible display math) is captured once
+  per dashboard session (`useState` initializer), not re-ticked on an interval — a long-lived open
+  tab could show an increasingly stale "eligible now" window until the next explicit refresh
+  (wallet reconnect, action-triggered per-mandate refresh, or a manual page reload). Acceptable for
+  this phase's scope; a periodic re-render tick is a reasonable small follow-up, not required by the
+  brief.
+
+**Unverified / left for later phases:** no real testnet run of the dashboard's chain reads/writes
+(live Freighter, real Soroban RPC) — Phase 13 owns the full real-network e2e. The merchant-side of
+Scene 5 (an actual relayer-submitted charge rejected with `MandateRevoked` after cancellation) is
+narrated in `docs/demo-script.md` but not re-proven here — it's already covered by Phase 2/3's
+contract test suites and Phase 9's relayer classifier; this phase only had to prove the consumer-
+facing display/copy for that rejection, which `failure-reasons.test.ts` does.

@@ -2,8 +2,9 @@
 /**
  * Minimal stand-in for the merchant API's public checkout endpoints
  * (`apps/api/src/routes/checkout-sessions.ts`'s `/public` and `/mandate`
- * routes), used only by the Playwright happy-path test
- * (`e2e/checkout.spec.ts`). Deliberately plain Node (`node:http`, no
+ * routes) and consumer discovery endpoints (`apps/api/src/routes/consumer.ts`),
+ * used by the Playwright happy-path tests (`e2e/checkout.spec.ts`,
+ * `e2e/dashboard.spec.ts`). Deliberately plain Node (`node:http`, no
  * framework, no TypeScript build step) so it starts in milliseconds as one
  * of `playwright.config.ts`'s `webServer` entries — this is a network-layer
  * stub, not a re-implementation of the real API's validation/idempotency
@@ -13,8 +14,23 @@
  * fetches the public session from the *server* side, so this has to be a
  * real HTTP server the Next.js process can reach — Playwright's
  * browser-level `page.route()` interception can't see that request at all.
+ * The dashboard's discovery/history fetches happen client-side, but are
+ * routed through this same server for consistency (one mock backend for
+ * the whole `apps/web` E2E suite).
+ *
+ * The consumer/dashboard fixture ids below must exactly match
+ * `src/lib/e2e-stub-fixtures.ts` and `src/lib/test-stubs.ts`'s
+ * `STUB_PAYER_ADDRESS` — this "database" half and the stub `MandateGateway`
+ * "chain" half must agree on the same mandate for the dashboard to tell a
+ * consistent story.
  */
 import { createServer } from "node:http";
+
+const E2E_MANDATE_ID = "1".repeat(64);
+const E2E_MERCHANT_ADDRESS = `G${"M".repeat(55)}`;
+const E2E_ASSET_ADDRESS = `C${"A".repeat(55)}`;
+const E2E_PAYER_ADDRESS = "GATESTSTUBPAYERADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+const E2E_MERCHANT_NAME = "Acme Coffee Roasters";
 
 export const SESSION_ID = "e2e-happy-path-session";
 const PORT = Number(process.env.MOCK_API_PORT ?? 4310);
@@ -95,6 +111,60 @@ const server = createServer((req, res) => {
       } catch {
         send(res, 400, { code: "INVALID_BODY", message: "could not parse request body" });
       }
+    });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/consumer/mandates") {
+    const payerAddress = url.searchParams.get("payerAddress");
+    const data =
+      payerAddress === E2E_PAYER_ADDRESS
+        ? [
+            {
+              mandateId: E2E_MANDATE_ID,
+              merchant: { name: E2E_MERCHANT_NAME, walletAddress: E2E_MERCHANT_ADDRESS },
+              assetAddress: E2E_ASSET_ADDRESS,
+              assetDecimals: 7,
+              cachedStatus: "Active",
+              lastIndexedAt: new Date().toISOString(),
+            },
+          ]
+        : [];
+    send(res, 200, { data });
+    return;
+  }
+
+  if (req.method === "GET" && url.pathname === "/v1/consumer/payments") {
+    const payerAddress = url.searchParams.get("payerAddress");
+    if (payerAddress !== E2E_PAYER_ADDRESS) {
+      send(res, 200, { payments: [], failedAttempts: [] });
+      return;
+    }
+    send(res, 200, {
+      payments: [
+        {
+          paymentId: "2".repeat(64),
+          mandateId: E2E_MANDATE_ID,
+          chargeId: "3".repeat(64),
+          merchant: { name: E2E_MERCHANT_NAME, walletAddress: E2E_MERCHANT_ADDRESS },
+          amount: "15.0000000",
+          assetAddress: E2E_ASSET_ADDRESS,
+          transactionHash: "4".repeat(64),
+          createdAt: new Date(Date.now() - 86_400_000).toISOString(),
+        },
+      ],
+      failedAttempts: [
+        {
+          id: "failed-attempt-1",
+          mandateId: E2E_MANDATE_ID,
+          chargeId: "5".repeat(64),
+          merchant: { name: E2E_MERCHANT_NAME, walletAddress: E2E_MERCHANT_ADDRESS },
+          amount: "50.0000000",
+          status: "permanently_failed",
+          failureCode: "AmountExceedsChargeLimit",
+          attemptedAt: new Date(Date.now() - 43_200_000).toISOString(),
+        },
+      ],
     });
     return;
   }

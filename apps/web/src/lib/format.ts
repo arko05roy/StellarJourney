@@ -65,3 +65,8 @@ export function formatDate(unixSeconds: bigint): string {
   const date = new Date(Number(unixSeconds) * 1000);
   return date.toLocaleDateString(undefined, { dateStyle: "medium" });
 }
+
+/** The API/contract carry no human asset symbol/code — derived as a short, honest placeholder from the contract address until Phase 12's asset registry work lands. Never hides the full address: callers should show it alongside (CLAUDE.md §13). */
+export function formatAssetSymbol(assetAddress: string): string {
+  return `Asset ${assetAddress.slice(0, 4)}…${assetAddress.slice(-4)}`;
+}

@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
-import { loadDeployment, type NetworkName } from "@paymap/contract-client";
+import { loadDeployment } from "@paymap/contract-client";
 import { ApiError, fetchPublicCheckoutSession, type PublicCheckoutSession } from "@/lib/api";
+import { resolveNetwork } from "@/lib/network";
 import { CheckoutPageClient } from "@/components/checkout/checkout-page-client";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -12,16 +13,6 @@ export const dynamic = "force-dynamic";
 
 interface CheckoutSessionPageProps {
   params: Promise<{ sessionId: string }>;
-}
-
-const VALID_NETWORKS: readonly NetworkName[] = ["testnet", "futurenet", "local", "mainnet"];
-
-function resolveNetwork(): NetworkName {
-  const raw = process.env.STELLAR_NETWORK ?? "testnet";
-  if (!VALID_NETWORKS.includes(raw as NetworkName)) {
-    throw new Error(`Invalid STELLAR_NETWORK "${raw}" — expected one of ${VALID_NETWORKS.join(", ")}`);
-  }
-  return raw as NetworkName;
 }
 
 export default async function CheckoutSessionPage({ params }: CheckoutSessionPageProps) {

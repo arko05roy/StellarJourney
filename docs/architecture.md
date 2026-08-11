@@ -320,3 +320,106 @@ browser wallet extension or live RPC: `NEXT_PUBLIC_E2E_STUBS=1` (set only by
 fakes instead. The merchant API itself is stood in for by `e2e/fixtures/mock-api-server.mjs` (plain
 `node:http`, no framework) — necessary because the checkout session fetch happens in a Server
 Component, which Playwright's browser-level `page.route()` interception cannot see at all.
+
+## Phase 11 — Consumer dashboard (`apps/web`)
+
+### Two data sources with an explicit trust hierarchy
+
+The dashboard (`/dashboard`) reads from two places, and CLAUDE.md §2 decides which one wins on
+disagreement:
+
+- **Discovery/enrichment (DB, `apps/api/src/routes/consumer.ts`, unauthenticated)** —
+  `GET /v1/consumer/mandates?payerAddress=` lists `MandateIndex` rows for a payer (merchant display
+  name, asset address/decimals, a `cachedStatus` deliberately named to signal "last known, not
+  authoritative"); `GET /v1/consumer/payments?payerAddress=` lists `Payment`/`ChargeRequest` rows
+  for the same discovered mandate ids. Neither endpoint's status/amount fields are ever rendered as
+  a mandate's *current* state.
+- **Authority (chain, `lib/mandate-gateway.ts`)** — one `get_mandate` simulation call per
+  discovered mandate id, run directly from the browser against Soroban RPC. Every field a mandate
+  card shows (status, amounts, period usage, next eligible date) is derived from this live read,
+  never the DB cache.
+
+This makes `MandateIndex` need a payer-address entry point it didn't have before: only the
+merchant-authenticated `GET /v1/mandates/:id` (Phase 8) ever upserted it, and a payer's own browser
+never calls that route. `checkout-sessions.ts`'s `/mandate` link endpoint (Phase 10) now also
+upserts `MandateIndex` with the verified on-chain `payer` address at the moment a mandate is
+linked — the one piece of backend wiring this phase's discovery model depends on.
+
+### `lib/mandate-status.ts` — the formulas, not a second copy of the contract's rules
+
+Pure, bigint-only, unit-tested functions computing what the contract itself doesn't expose via a
+read method:
+
+- `deriveEffectiveStatus` — mirrors `lifecycle.rs::effective_status`'s lazy-expiry rule
+  (`Active`/`Paused` past `expiresAt` reads as `Expired`). Defense in depth: a live `get_mandate`
+  already returns this computed status, so this mostly matters for a `MandateIndex`-cached label
+  shown before the live read resolves.
+- `computeEffectivePeriodUsage` — the period-usage meter uses the *effective* period at "now", not
+  the mandate's raw stored `currentPeriodStart`/`currentPeriodCollected`, so an idle mandate never
+  shows a stale "period full" reading (same `floor((t - start_at) / period_seconds)` boundary math
+  as `charge.rs`).
+- `computeNextEligibleChargeDate` — the one PLAN.md §16.1 card field the contract has no getter
+  for at all. Two independent gates: the interval floor
+  (`max(startAt, (lastChargedAt ?? startAt) + minIntervalSeconds)`), and a period-allowance check
+  that rolls the candidate forward to the next period boundary if that period is already
+  (case: `Fixed`) or fully (`Variable`, since the exact next amount is the merchant's future
+  choice) exhausted.
+- `deriveControlAvailability` — Pause only on `Active`, Resume only on `Paused`, Cancel autopay on
+  either — mirrors `lifecycle.rs`'s legal-transition table so a rendered button can never be
+  clicked into a rejected call.
+
+### `lib/mandate-gateway.ts` — a second gateway alongside `chain-gateway.ts`, not a merge
+
+Phase 10's `ChainGateway` is checkout-scoped (`createMandate`/`approve`/`queryAllowance`). The
+dashboard needed a distinct read path (`getMandate`) and the three lifecycle writes
+(`pauseMandate`/`resumeMandate`/`revokeMandate`, all payer-signs-and-submits via
+`submitAsInvoker` — same authorization flow as `create_mandate`), plus the same
+`approve`/`queryAllowance` primitives reused verbatim for the post-revoke allowance-zero prompt.
+Kept as a separate `MandateGateway` interface (not folded into `ChainGateway`) since the two
+components' signing lifetimes differ: checkout's gateway is used once per session, the dashboard's
+is a long-lived singleton reused across every mandate card and every action.
+
+### `lib/revoke-flow.ts` — "cancel autopay" as its own state machine
+
+Mirrors `checkout-state.ts`'s reducer pattern. Revocation itself is unconditional and immediate the
+moment `revoke_mandate` confirms (PLAN.md §10.9) — nothing downstream can make it conditional. What
+the reducer sequences *after* that is the lead's decision: `checking-allowance` ->
+(`allowance-prompt` if non-zero, straight to `complete` if already zero) -> `zeroing-allowance` (or
+`SKIP_ALLOWANCE`) -> `complete`. Declining the prompt is a first-class, fully-supported outcome —
+the mandate is already safely cancelled either way. `components/dashboard/cancel-autopay-dialog.tsx`
+drives the actual `MandateGateway` calls from `useEffect`s keyed on `state.phase` alone (not every
+captured prop), since several of the parent's props are fresh literals every render and the effect
+must fire exactly once per phase transition, never re-submit a signed transaction because a
+callback's identity changed.
+
+### `lib/failure-reasons.ts` — payment-history's failed-attempt copy
+
+Distinct from `lib/errors.ts`'s checkout-flow copy (which frames the *payer's own* action failing).
+Every one of the 24 frozen contract error codes plus the relayer's 3 infra-transient reasons
+(`RPC_UNAVAILABLE`/`SEND_FAILED`/`TX_NOT_INCLUDED`, `apps/relayer/src/classify.ts`) gets a
+"here's what was tried, here's why we blocked it" sentence — a blocked attempt on this dashboard is
+framed as proof the protection worked, not a scary error. The stable machine code is always shown
+alongside, small, for support (CLAUDE.md §8).
+
+### `DashboardShell` orchestration
+
+One client component owns wallet connection, per-mandate live reads (`Record<mandateId, ...>`
+keyed state, refreshed individually so one mandate's action never reloads the whole list), payment
+history, and tab filtering. The five-tab nav (PLAN.md §16.1) filters the same live-read set two
+ways: "Upcoming"/"Active" both show `status === "Active"` mandates (different sort — soonest next
+charge vs. merchant name), "Paused & ended" shows everything else. A `pause`/`resume` failure
+(e.g. the mandate was already revoked in another tab/session underneath the user) both surfaces an
+inline error *and* triggers `refreshMandate` in a `finally` block, so the card's controls re-derive
+from fresh chain state rather than staying stale — the task's explicit "refresh and explain, don't
+just error out" requirement.
+
+### E2E stub wiring
+
+`lib/e2e-stub-fixtures.ts` is the single source of truth for the one fixture mandate id/merchant/
+asset shared between `lib/test-stubs.ts`'s stub `MandateGateway` ("chain") and
+`e2e/fixtures/mock-api-server.mjs`'s new `/v1/consumer/mandates`/`/v1/consumer/payments` routes
+("database") — both halves must agree for the dashboard's discovery-then-verify story to hold
+together in a test with no real backend or RPC. The stub gateway also seeds a realistic non-zero
+starting allowance (as if Phase 10's checkout `approve` had already run), so
+`e2e/dashboard.spec.ts` exercises the actual allowance-to-zero prompt, not just its already-zero
+skip path.

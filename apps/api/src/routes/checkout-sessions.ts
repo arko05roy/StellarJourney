@@ -164,6 +164,37 @@ const checkoutSessionsRoutes: FastifyPluginAsync = async (app) => {
       where: { id },
       data: { mandateId: input.mandateId, payerAddress: input.payerAddress, status: CheckoutSessionStatus.completed },
     });
+
+    // Seeds `MandateIndex` with `payerAddress` so the consumer dashboard
+    // (Phase 11) can discover this mandate — before this, the only writer
+    // of `MandateIndex` was the merchant-authenticated `GET /v1/mandates/:id`
+    // read (`mandates.ts`), which the payer's browser never calls. This is
+    // purely a discovery/enrichment cache (CLAUDE.md §2): the dashboard
+    // still re-reads live on-chain state for anything it displays or acts
+    // on, never trusting this row as authoritative.
+    await app.prisma.mandateIndex
+      .upsert({
+        where: { mandateId: input.mandateId },
+        create: {
+          mandateId: input.mandateId,
+          merchantId: session.merchantId,
+          payerAddress: mandate.payer,
+          merchantAddress: mandate.merchant,
+          assetAddress: mandate.asset,
+          status: mandate.status,
+          lastIndexedAt: app.now(),
+        },
+        update: {
+          payerAddress: mandate.payer,
+          status: mandate.status,
+          lastIndexedAt: app.now(),
+          contractStateVersion: { increment: 1 },
+        },
+      })
+      .catch((error: unknown) => {
+        app.log.warn({ error, mandateId: input.mandateId }, "failed to seed MandateIndex cache (non-fatal)");
+      });
+
     reply.status(200).send(toCheckoutSessionResponse(updated));
   });
 };

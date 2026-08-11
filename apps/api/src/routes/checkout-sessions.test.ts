@@ -260,6 +260,21 @@ describe("POST /v1/checkout-sessions/:id/mandate", () => {
     expect(body.payerAddress).toBe(payerAddress);
   });
 
+  it("seeds MandateIndex with the payer address so the consumer dashboard can discover this mandate", async () => {
+    const sessionId = await createSession();
+    const payerAddress = randomStellarAccountAddress();
+    const mandateId = randomHexId32();
+    testApp.mandateReader.setMandate(
+      buildMandate({ id: mandateId, payer: payerAddress, merchant: merchantWalletAddress, asset: productAssetAddress, status: "Active" }),
+    );
+
+    await testApp.app.inject({ method: "POST", url: `/v1/checkout-sessions/${sessionId}/mandate`, payload: { mandateId, payerAddress } });
+
+    const cached = await testApp.prisma.mandateIndex.findUnique({ where: { mandateId } });
+    expect(cached?.payerAddress).toBe(payerAddress);
+    expect(cached?.status).toBe("Active");
+  });
+
   it("is idempotent when replayed with the same mandateId", async () => {
     const sessionId = await createSession();
     const payerAddress = randomStellarAccountAddress();
