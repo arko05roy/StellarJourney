@@ -99,3 +99,126 @@ tuple variants are supported). The contract now defines `Variable(i128)` — the
 `max_per_charge` value carried positionally instead of by name. No business rule, invariant, or
 serialized meaning changes; this is a mechanical, semantics-preserving adaptation to an SDK
 constraint, not a product decision.
+
+---
+
+## Phase 2 — Mandate Lifecycle (create / pause / resume / revoke)
+
+Scope: `create_mandate`, `pause_mandate`, `resume_mandate`, `revoke_mandate`, `get_mandate`
+(`contracts/mandate-registry/src/lifecycle.rs`). No money movement — `charge` (Phase 3) is the
+first point a token transfer occurs.
+
+### New error codes (21–23)
+
+Appended after the frozen 1–20 block (`contracts/mandate-registry/src/error.rs`); same ABI
+stability rule applies — these are now frozen too, going forward only 24+ may be added.
+
+| Code | Name                   | Meaning                                                                 |
+|------|------------------------|--------------------------------------------------------------------------|
+| 21   | InvalidMandateInput    | A `create_mandate` input bound failed (see table below) other than a non-positive amount-rule value, which uses `InvalidAmount` (9) since it already existed. |
+| 22   | DuplicateMandate       | The derived `mandate_id` already has a stored mandate.                    |
+| 23   | InvalidStateTransition | A lifecycle transition has no legal source/target pair and no more specific status error applies. Currently only `resume_mandate` called on an already-`Active` mandate. |
+
+### `create_mandate` input validation (all checked before any storage write)
+
+| Bound                                                              | Error on violation         |
+|---------------------------------------------------------------------|-----------------------------|
+| `Fixed(a)`: `a > 0`                                                  | `InvalidAmount`             |
+| `Variable(max)`: `max > 0`                                           | `InvalidAmount`              |
+| `max_per_period > 0`                                                 | `InvalidMandateInput`        |
+| `max_per_period >= per_charge_cap` (the fixed amount or `max_per_charge`) | `InvalidMandateInput`    |
+| `period_seconds > 0`                                                  | `InvalidMandateInput`        |
+| `expires_at > start_at`                                               | `InvalidMandateInput`        |
+| `expires_at > now` (refuse to create an already-dead mandate)          | `InvalidMandateInput`        |
+| `payer != merchant` (no self-mandates)                                | `InvalidMandateInput`        |
+| duplicate derived `mandate_id`                                        | `DuplicateMandate`           |
+
+Two bounds are **intentionally unchecked**, both documented in `lifecycle::validate_input`:
+
+- `min_interval_seconds` — `0` means "no interval constraint" and is legal; a value larger than
+  `period_seconds` is also legal (a long interval inside a long period is a normal product
+  shape, e.g. one charge per year inside a multi-year mandate). No upper or relative bound is
+  enforced.
+- `max_successful_charges` — **`0` means unlimited charges**, not zero charges. Any other `u32`
+  value is a hard cap enforced once `charge` lands in Phase 3. This is the one place a "falsy"
+  stored value inverts the intuitive reading, so it is called out explicitly here, in
+  `types.rs`/`lifecycle.rs` doc comments, and must be mirrored by the backend/frontend layers
+  that render this field (CLAUDE.md §20 — no duplicated, drifted business rules).
+
+### Legal state-transition table
+
+`Active`, `Paused`, `Revoked`, `Completed` are the four states that are ever actually
+*persisted*. `Expired` is never persisted (see next section) — it only ever appears as a
+lazily-computed value on read/write-time checks, so the table below lists it as a possible
+*computed* source state for `pause`/`resume`/`revoke`, never as a source or destination the
+contract writes to storage.
+
+| Method           | Legal source → destination         | Rejected source → error                                                                 |
+|------------------|--------------------------------------|--------------------------------------------------------------------------------------------|
+| `pause_mandate`  | `Active → Paused`                    | `Paused → MandateNotActive`; `Revoked → MandateRevoked`; `Completed → MandateCompleted`; `Expired (computed) → MandateExpired` |
+| `resume_mandate` | `Paused → Active`                    | `Active → InvalidStateTransition`; `Revoked → MandateRevoked`; `Completed → MandateCompleted`; `Expired (computed) → MandateExpired` |
+| `revoke_mandate` | `Active → Revoked`, `Paused → Revoked`, `Expired (computed) → Revoked` | `Revoked → MandateRevoked`; `Completed → MandateCompleted` |
+
+Two deliberate design choices embedded in this table:
+
+1. **No silent idempotent no-ops.** Pausing an already-`Paused` mandate, resuming an
+   already-`Active` mandate, or revoking an already-`Revoked` mandate all *reject* rather than
+   succeeding a second time. A caller that thinks it's performing a real transition but hits a
+   no-op would have that bug hidden from it; rejecting surfaces the mismatch immediately.
+2. **Revoke is the only method with an `Expired (computed) → ...` success path.** See below.
+
+### Computed-only expiry
+
+`MandateStatus::Expired` is **never written to storage**, in any phase-2 code path. Instead:
+
+- `get_mandate` derives it on every read: if the stored status is `Active` or `Paused` and
+  `now >= expires_at`, the returned copy reports `Expired`; the stored record itself is
+  untouched. A `Revoked` or `Completed` stored mandate keeps that terminal status even past
+  `expires_at` — those are already final and must never be masked by `Expired`.
+- `pause_mandate` / `resume_mandate` apply the same computed status internally before checking
+  the transition table, and reject with `MandateExpired` if the computed status is `Expired`
+  — but since rejection means no storage write happens at all, "not persisting `Expired`" and
+  "rejecting an expired mandate" amount to the same code path here.
+- `revoke_mandate` also computes status the same way, but — uniquely — treats a computed
+  `Expired` mandate as a legal source for a successful transition straight to `Revoked` (see
+  next section). It still never writes `Expired` itself; it writes `Revoked` directly.
+
+Rationale for computed-only (recorded here per the Phase 2 lead decision, not re-litigated):
+avoids a storage write on the read path (`get_mandate` stays side-effect-free, which also means
+it can never fail with `ArithmeticOverflow` or interact with TTL bumps just from being read),
+and avoids a second "which write actually flipped this to Expired" question for indexers — there
+is no `mandate_expired` event for the same reason (see `events.rs` module doc).
+
+### Revoke always permitted, even when expired
+
+`revoke_mandate` succeeds against a mandate whose computed status is `Expired`, transitioning it
+directly to `Revoked`. This is deliberate, not an oversight: CLAUDE.md §7 and PLAN.md §10.9 both
+state revocation is the payer's **unconditional** right — it must never require merchant
+approval and must be immediately effective. If expiry could block revocation, a payer who wants
+their mandate visibly closed (e.g. for their own records, or so a merchant integration that
+still reads stale off-chain state can see the terminal state on-chain) would have no way to
+reach `Revoked` once `expires_at` passes — they'd be stuck with the mandate perpetually reporting
+computed-`Expired` with no way to force the terminal, on-chain-persisted state they're entitled
+to set. Allowing `Expired → Revoked` costs nothing security-wise (an expired mandate could not be
+charged either way) and closes that gap.
+
+### Authorization
+
+`create_mandate` requires `input.payer.require_auth()`; `pause_mandate` / `resume_mandate` /
+`revoke_mandate` require `mandate.payer.require_auth()` after loading the stored mandate. The
+merchant and the relayer have zero lifecycle authority — proved in
+`contracts/mandate-registry/src/test_lifecycle.rs` via `env.mock_auths` (never
+`mock_all_auths`) with the *wrong* address mocked, so each `#[should_panic]` wrong-signer test
+fails specifically because the payer's `require_auth()` finds no matching authorization entry,
+not because auth was skipped entirely.
+
+### Events
+
+`mandate_created`, `mandate_paused`, `mandate_resumed`, `mandate_revoked` (`events.rs`), each
+carrying `mandate_id`/`payer`/`merchant` as topics and a `timestamp`; `mandate_created` also
+carries the full mandate terms (asset, amount rule, caps, window, `metadata_hash`) so an indexer
+can reconstruct mandate state from events alone. No plaintext metadata is ever emitted — only
+`metadata_hash`. There is no `mandate_expired` event in Phase 2 (see computed-only expiry above):
+nothing is written to storage when expiry is merely observed, so there is no successful state
+transition to attach such an event to. A rejected call (any `Err` return) never reaches the
+`publish` call — proved by `pause_mandate_rejected_call_emits_no_event`.

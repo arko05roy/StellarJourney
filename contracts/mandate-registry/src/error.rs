@@ -37,4 +37,23 @@ pub enum Error {
     DuplicateRefund = 19,
     ArithmeticOverflow = 20,
     // --- End frozen block. Phase 2+ may append new variants at 21+. ---
+    /// A `create_mandate` input violates one of the bound checks enumerated
+    /// in `lifecycle::validate_input` (non-positive amount rule value,
+    /// `max_per_period` non-positive or below the per-charge cap,
+    /// `period_seconds == 0`, `expires_at <= start_at`, `expires_at` already
+    /// in the past, or `payer == merchant`). See `docs/contract-invariants.md`
+    /// for the full bound table.
+    InvalidMandateInput = 21,
+    /// `create_mandate` derived an id that already has a stored mandate.
+    /// Ids are derived deterministically from `(network_id, contract_address,
+    /// payer, merchant, asset, client_nonce)`; a distinct `client_nonce`
+    /// always produces a distinct id, so this only fires on a genuine replay
+    /// of an identical input tuple.
+    DuplicateMandate = 22,
+    /// A lifecycle transition was requested that the state machine does not
+    /// define, and no more specific status error applies. Currently only
+    /// `resume_mandate` called on an `Active` mandate (Active is not a legal
+    /// resume source and isn't itself a rejection reason like Paused/Revoked/
+    /// Completed/Expired).
+    InvalidStateTransition = 23,
 }

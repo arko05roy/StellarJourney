@@ -48,17 +48,19 @@ Rule: contract is policy authority. Every phase ships vertical slice + tests. No
 
 **Goal:** payer-only state machine, no money movement.
 
-- [ ] `create_mandate(input) -> BytesN<32>` — `payer.require_auth()`, validate all bounds (positive amounts, `expires_at > start_at`, `period_seconds > 0`, `max_per_period >= max_per_charge`), reject duplicate id
-- [ ] `pause_mandate`, `resume_mandate`, `revoke_mandate` — payer auth, legal-transition table only
-- [ ] `get_mandate` — lazy `Expired` evaluation on read (PLAN.md §10.8), does not persist-write on read path
-- [ ] Events: `mandate_created`, `mandate_paused`, `mandate_resumed`, `mandate_revoked`, `mandate_expired`
-- [ ] Tests: success, wrong-signer rejection per method, resume-from-revoked rejection, revoke-from-completed, pause idempotency
+- [x] `create_mandate(input) -> BytesN<32>` — `payer.require_auth()`, validate all bounds (positive amounts, `expires_at > start_at`, `period_seconds > 0`, `max_per_period >= max_per_charge`), reject duplicate id
+- [x] `pause_mandate`, `resume_mandate`, `revoke_mandate` — payer auth, legal-transition table only
+- [x] `get_mandate` — lazy `Expired` evaluation on read (PLAN.md §10.8), does not persist-write on read path
+- [x] Events: `mandate_created`, `mandate_paused`, `mandate_resumed`, `mandate_revoked` (no `mandate_expired` — expiry is computed-only, never a state transition; see decision below)
+- [x] Tests: success, wrong-signer rejection per method, resume-from-revoked rejection, revoke-from-completed, pause idempotency (all as explicit rejections — no idempotent no-ops)
 
 **Gate:** `cargo test --workspace`.
 
 **Invariants:** §7 Authorization (payer-only), §7 State (revocation immediate, no merchant approval).
 
-**Decision needed:** does lazy expiry write status on next *write* interaction, or stay computed-only? Recommend computed-only + `Expired` derived in reads; avoids storage write on read path.
+**Decision (resolved):** lazy expiry stays **computed-only** — never written to storage, on
+either the read path or any write path. See `docs/contract-invariants.md` Phase 2 section for
+the full rationale.
 
 ---
 
@@ -389,3 +391,70 @@ pnpm build
 none of the CLAUDE.md §7 authorization/amount/time invariants are exercised by real business
 logic yet — only the storage/id/math primitives they'll be built on. `docs/contract-invariants.md`
 Phase 1 section is factual record only; the full invariant→test mapping is still Phase 6.
+
+### Phase 2 — Mandate Lifecycle (done)
+
+**What changed:** two new modules — `lifecycle.rs` (`create_mandate`, `pause_mandate`,
+`resume_mandate`, `revoke_mandate`, `get_mandate`, plus the private `effective_status` and
+`validate_input` helpers) and `events.rs` (`MandateCreated`, `MandatePaused`, `MandateResumed`,
+`MandateRevoked`, all `#[contractevent]`). `lib.rs` now exposes the five lifecycle methods as
+thin `#[contractimpl]` wrappers around `lifecycle.rs`. `error.rs` gains three new frozen codes
+(21 `InvalidMandateInput`, 22 `DuplicateMandate`, 23 `InvalidStateTransition`) appended after the
+Phase 1 frozen 1–20 block, per the lead's decision. No money movement; every write goes through
+the existing `storage.rs` helpers; no new arithmetic was needed (Phase 2 only compares/copies
+values, so `math.rs` is untouched). `docs/contract-invariants.md` gained a full Phase 2 section:
+the legal state-transition table, the new error codes, the `max_successful_charges == 0` =
+unlimited rule, the computed-only-expiry decision, and the always-permitted-even-when-expired
+revoke rule with rationale.
+
+Tests landed in a new `test_lifecycle.rs` module (65 tests total in the crate now, 56 of them
+new): success paths for all 5 methods; `create_mandate` input-bound rejections (one test per
+bound, both zero and negative amounts); duplicate-id rejection; every legal and illegal state
+transition per the table, including `Completed`-source rejections constructed by writing
+directly into storage (bypassing `create_mandate`, since Phase 2 has no code path that can ever
+produce `Completed` — that's Phase 3/4's `charge` completing the mandate); expiry tests proving
+`get_mandate` doesn't mutate storage and that a `Revoked`/`Completed` mandate's terminal status
+survives past `expires_at`; event-field assertions for all 4 events plus a "rejected call emits
+no event" test; and an `env.auths()` inspection proving `create_mandate` genuinely required the
+payer's authorization (not just "some" authorization).
+
+**Authorization proof method:** every wrong-signer test uses `env.mock_auths`/`MockAuth` with
+the auth mocked for the *wrong* address (merchant, a random third party standing in for "the
+relayer" — there's no on-chain relayer identity to mock, it has zero special authority per
+CLAUDE.md §11) and `#[should_panic]`, so the test fails specifically because the payer's
+`require_auth()` finds no matching entry — never `mock_all_auths`, which would hide a missing
+auth check entirely.
+
+**Judgment calls / deviations (flagged):**
+- Spec's example error names (`InvalidMandateInput`/`DuplicateMandate`/`InvalidStateTransition`)
+  were adopted as-is at 21/22/23. `InvalidMandateInput` is a deliberate catch-all for every
+  `create_mandate` bound except non-positive amounts (which reuses the existing `InvalidAmount`
+  since it already existed and fits exactly) — CLAUDE.md's "no generic errors" principle is about
+  not collapsing genuinely different failure classes into `INTERNAL_ERROR`; a single input-
+  validation-failed code for a batch of mutually-exclusive-at-call-time construction bounds
+  (checked in one linear pass before any state exists) is a reasonable granularity, not a
+  regression to a generic bucket.
+- `min_interval_seconds` and `max_successful_charges` are validated as documented in the task
+  brief: effectively unconstrained (0 is legal for both, with different meanings — "no
+  constraint" vs. "unlimited").
+- Wrong-signer "relayer" tests use a freshly generated `Address` rather than a distinguished
+  relayer identity, since the contract has no concept of a relayer address at all (by design —
+  CLAUDE.md §11: the relayer has zero spending or lifecycle authority). This is the correct
+  on-chain reflection of that invariant, not a shortcut.
+
+**Commands run (all passed):**
+```
+cargo fmt --all
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace              (65 mandate-registry tests + 1 mock-token test, all pass)
+cargo build --release --target wasm32v1-none
+pnpm lint
+pnpm typecheck
+pnpm build
+```
+
+**Unverified / left for later phases:** no charge/refund logic exists yet, so `Completed` can
+only be reached in tests via direct storage writes, never through the public API — that becomes
+real once Phase 3/4 land. The full CLAUDE.md §7 invariant→test mapping is still Phase 6; this
+phase's `docs/contract-invariants.md` section is scoped to what Phase 2 itself introduced.
