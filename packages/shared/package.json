@@ -15,9 +15,15 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "test": "echo \"no tests yet\" && exit 0"
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@paymap/contract-client": "workspace:*",
+    "@stellar/stellar-sdk": "^16.1.0",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@paymap/config": "workspace:*"
+    "@paymap/config": "workspace:*",
+    "vitest": "^2.1.8"
   }
 }

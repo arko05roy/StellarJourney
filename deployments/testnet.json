@@ -1,0 +1,14 @@
+{
+  "network": "testnet",
+  "networkPassphrase": "Test SDF Network ; September 2015",
+  "contractId": "CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22",
+  "wasmHash": "8b4f68e3f1ecb259d7cbb7153032ac8afbd279d1c5d4eb82ee0896c935e2832c",
+  "deployedAt": "2026-07-27T17:17:54.889Z",
+  "rpcUrl": "https://soroban-testnet.stellar.org",
+  "asset": {
+    "code": "PUSD",
+    "issuer": "GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT",
+    "contractId": "CB223VUC7MMCFT352EO7QLLV6QWHXTDOXOHY2BW7DZTO3VXBXAI7DUZJ",
+    "decimals": 7
+  }
+}

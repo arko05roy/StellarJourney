@@ -211,3 +211,57 @@
   literal with *no* underscores at all (e.g. a raw 16-hex-digit constant
   like a golden-ratio PRNG multiplier) is exempt regardless of digit count —
   the lint only triggers once grouping is attempted and is inconsistent.
+- `stellar contract build --package <name> --optimize` optimizes the wasm
+  **in place**, overwriting `target/wasm32v1-none/release/<name>.wasm`
+  itself — it does *not* produce a separate `<name>.optimized.wasm` file.
+  That distinct-file convention belongs to the older, now-deprecated
+  `stellar contract optimize --wasm <path>` two-step command. A deploy
+  script written against the two-step convention's output filename will
+  fail with "No such file or directory" the first time it's actually run
+  against the one-step `build --optimize` command — verified by running
+  both and comparing `ls` output (39,711 bytes via the two-step command vs.
+  26,857 bytes via `build --optimize` for the same source, so the two
+  commands don't even produce byte-identical output — don't assume either
+  one's filename or size convention without a real run).
+- `@stellar/stellar-sdk/contract`'s `AssembledTransaction.signAuthEntries({ authorizeEntry })`
+  is not a "supply your own signer" hook the way it first looks — the SDK
+  *always* calls whatever `authorizeEntry` function you pass with the exact
+  same 5-argument signature as `@stellar/stellar-sdk`'s own `authorizeEntry`
+  (`entry, signer, validUntilLedgerSeq, networkPassphrase, forAddress?`),
+  where `signer` (2nd arg) is an SDK-internally-constructed wallet-style
+  callback wrapping whatever `signAuthEntry` you provided (or a no-op if you
+  didn't). To drive this with a bare `Keypair` instead of a wallet callback,
+  write an `authorizeEntry` override that *ignores* the 2nd argument
+  entirely and calls the base `authorizeEntry(entry, keypair,
+  validUntilLedgerSeq, networkPassphrase, forAddress)` directly — confirmed
+  by reading `signAuthEntries`'s actual implementation
+  (`assembled_transaction.js`, not just the `.d.ts`): passing a
+  reference-distinct custom `authorizeEntry` also skips the "you must
+  provide `signAuthEntry`" validation entirely (that check is gated behind
+  `authorizeEntry === <the default import>`), so `signAuthEntry` doesn't
+  need to be supplied at all in this path. Verified working end-to-end on
+  real testnet (Phase 7's merchant-authorizes/relayer-submits `charge`).
+- Zod (v3) infers *any* object field whose output type includes `undefined`
+  as an optional TS property (`field?: T`) — this happens identically for
+  both `.optional()` and `z.union([Schema, z.undefined()])`. This can never
+  structurally match a hand-written domain type that models "key always
+  present, value may be `undefined`" as `field: T | undefined` (a required
+  key) under `exactOptionalPropertyTypes: true` — TS treats "optional key"
+  and "required key typed `T | undefined`" as genuinely different shapes
+  under that flag, so a `z.infer<...> extends DomainType` compile-time
+  assertion will fail specifically on that one field even though the schema
+  accepts every real value correctly at runtime. Don't fight this with more
+  Zod cleverness — drop the compile-time assertion for that one field
+  specifically (with a comment explaining why) and rely on runtime tests
+  covering both the `undefined` and set cases instead.
+- A committed `stellar contract bindings typescript` output file will not
+  typecheck under a strict-by-default shared `tsconfig.base.json` as-is: it
+  needs `lib: [..., "DOM"]` (for its own `typeof window !== "undefined"`
+  Buffer-polyfill guard) and `noImplicitOverride: false` (the generated
+  `Client` class overrides `ContractClient` members without the `override`
+  keyword, since the codegen tool doesn't emit one). Scope both relaxations
+  to just the package hosting the generated file's `tsconfig.json`, not the
+  shared base config — confirmed the rest of the strict flags
+  (`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, etc.) still
+  apply fine to that package's hand-written files alongside the relaxed
+  generated one.

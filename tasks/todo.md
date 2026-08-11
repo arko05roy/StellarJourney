@@ -150,12 +150,12 @@ the full rationale.
 
 ## Phase 7 — Deploy + Contract Client
 
-- [ ] `scripts/deploy-testnet.ts` — build, optimize, deploy, record contract id
-- [ ] Deployment registry JSON keyed by network
-- [ ] `packages/contract-client` — generated bindings + typed wrapper (i128 ↔ bigint, never `number`)
-- [ ] `packages/stellar` — tx builder, simulation helper, auth-entry assembly, error-code → typed error decoder
-- [ ] `packages/shared` — Zod schemas, decimal-string ↔ base-unit conversion (reject over-precision), shared mandate types
-- [ ] `scripts/create-demo-mandate.ts` — creates + charges a mandate on testnet
+- [x] `scripts/deploy-testnet.ts` — build, optimize, deploy, record contract id
+- [x] Deployment registry JSON keyed by network
+- [x] `packages/contract-client` — generated bindings + typed wrapper (i128 ↔ bigint, never `number`)
+- [x] `packages/stellar` — tx builder, simulation helper, auth-entry assembly, error-code → typed error decoder
+- [x] `packages/shared` — Zod schemas, decimal-string ↔ base-unit conversion (reject over-precision), shared mandate types
+- [x] `scripts/create-demo-mandate.ts` — creates + charges a mandate on testnet
 
 **Gate:** demo script executes real testnet mandate create + charge; tx hashes recorded.
 
@@ -827,3 +827,137 @@ a token uses) with proportionate confidence. No true multi-thread/concurrent-sub
 exists (Soroban's local sandbox test environment is single-threaded) — "two workers submit the
 same charge concurrently" is instead covered structurally (replay guards are storage-checked, not
 in-memory-cached) and will get a real concurrency proof once Phase 9's relayer lands.
+
+### Phase 7 — Deploy + Contract Client (done)
+
+**What changed:** deployed `mandate-registry` to Stellar testnet for the first time, and built
+every TypeScript package the rest of the product depends on. `scripts/deploy-testnet.ts` builds +
+optimizes the wasm (`stellar contract build --package mandate-registry --optimize` — this
+optimizes *in place*, overwriting `mandate_registry.wasm`; the older two-step `contract
+optimize` command's separate `*.optimized.wasm` output is stale/deprecated, corrected after the
+first real run failed on the wrong path), uploads it, deploys a fresh instance, and idempotently
+ensures a real SEP-41 test asset exists: a classic asset `PUSD` issued by a repo-controlled
+`paymap-asset-issuer` identity, wrapped in a real Stellar Asset Contract (chosen over an existing
+testnet USDC SAC so the issuer key is ours and the payer can be funded to any amount with no
+faucet dependency — a SAC's `approve`/`allowance`/`transfer_from`/`transfer`/`balance` semantics
+are identical regardless of which classic asset it wraps). Writes the public
+`deployments/testnet.json` registry (`{network, networkPassphrase, contractId, wasmHash,
+deployedAt, rpcUrl, asset: {code, issuer, contractId, decimals}}`).
+
+`packages/contract-client`: regenerated bindings via `stellar contract bindings typescript`
+(byte-identical to the ones already scaffolded from a prior session, confirmed by diffing a fresh
+regen against the committed file), wrapped in a hand-written domain layer (`domain.ts`) converting
+every `i128`/`u64` to `bigint`, every `BytesN<32>` to a lowercase-hex string, and the generated
+`{tag, values}` shapes into a proper `MandateStatus` string-literal union and `AmountRule`
+discriminated union — never a JS `number` for a token quantity anywhere. `client.ts` is the typed
+facade (`createMandateRegistryClient`, `getMandate`/`getPayment`/`getRefund`/`getRefundedTotal`
+read convenience wrappers that throw a typed `MandateReadError`, and `buildCreateMandate`/
+`buildPauseMandate`/`buildResumeMandate`/`buildRevokeMandate`/`buildCharge`/`buildRefund`
+transaction builders). `deployment-registry.ts` loads `deployments/<network>.json` via a
+repo-root-relative fs path (documented as a monorepo-internal convenience, since this package is
+never published standalone).
+
+`packages/stellar`: `errors.ts` — the frozen 1-24 error table with a `retryable` classification
+matching CLAUDE.md §11 exactly (permanent: revoked/expired/duplicate/over-limit/too-soon/
+max-count; transient, per merchant policy: insufficient allowance/balance), plus
+`errors.test.ts`, which parses `contracts/mandate-registry/src/error.rs` directly with a regex
+and asserts the TS table never drifts. `signer.ts`'s `keypairSigner(secretKey)` wraps a
+`Keypair` as both callback shapes the generated client needs — `signTransaction` for the tx
+envelope, and an `authorizeEntry` override (matching `@stellar/stellar-sdk`'s own `authorizeEntry`
+signature positionally, ignoring the SDK-constructed wallet-style callback in the 2nd argument
+position and delegating to the base `authorizeEntry` with a real `Keypair` instead) for one
+Soroban auth entry — with zero hand-rolled hashing/signing logic. `submit.ts` implements the two
+authorization flows: `submitAsInvoker` (payer signs and submits — `create_mandate`/
+`pause_mandate`/`resume_mandate`/`revoke_mandate`) and `submitAsRelayer` (merchant authorizes via
+`signAuthEntries`, a *separate* relayer identity submits and pays the fee — `charge`/`refund`),
+both refusing to proceed past an already-simulated `Result::Err` via `assertSimulatedOk`.
+
+`packages/shared`: `money.ts` (`decimalToBaseUnits`/`baseUnitsToDecimalString`/
+`decimalToPositiveBaseUnits`, pure-`BigInt` string arithmetic, rejects over-precision and
+malformed input, never rounds, never touches a JS float — 26 tests including full round-trip
+identity at 0/2/7/18 decimals and an i128-range value). `types.ts` mirrors the contract's
+`MandateStatus`/`AmountRule`/`Mandate`/`MandateInput`/`PaymentReceipt`/`RefundReceipt` as Zod
+schemas with checksum-validated Stellar addresses (`StrKey.isValidEd25519PublicKey`/
+`isValidContract`), plus compile-time `extends` assertions tying each schema's inferred type back
+to `@paymap/contract-client`'s domain types (one exception: `MandateSchema` skips the compile-time
+assertion for `lastChargedAt` — Zod always infers a field whose output includes `undefined` as an
+optional TS property, which can never structurally match the domain type's required-but-possibly-
+undefined shape under `exactOptionalPropertyTypes`; proven correct by runtime tests instead,
+documented inline).
+
+`scripts/create-demo-mandate.ts` ran the full flow for real: funded/trusted-lined the identities,
+approved a bounded allowance (`5.00 PUSD x 3 charges + 1.00 buffer = 16.00 PUSD` — never
+unlimited), created a mandate (payer signs and submits via `submitAsInvoker`), and charged it
+(merchant authorizes via `signAuthEntries`, a genuinely separate `paymap-relayer` identity signs
+the tx envelope and submits — that identity never touches the merchant's or payer's key at any
+point). Real results below.
+
+**Real testnet results:**
+- Network: `testnet` (`Test SDF Network ; September 2015`), RPC `https://soroban-testnet.stellar.org`
+- `mandate-registry` contract id: `CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22`
+- Wasm hash: `8b4f68e3f1ecb259d7cbb7153032ac8afbd279d1c5d4eb82ee0896c935e2832c` (26,857 bytes optimized)
+- Test asset: `PUSD`, issuer `GCPQA5BPDIMI6P3LRIDCKVBOAFU35VKCCWDNZN4N6QRLX4ZJUQKZTHBT`, SAC
+  `CB223VUC7MMCFT352EO7QLLV6QWHXTDOXOHY2BW7DZTO3VXBXAI7DUZJ` (7 decimals)
+- Payer `GCAZZ4N5H3I4VUYUJHSHVIRQYRR62IPOJ4G6L2N2WAOYHNUTOKCQWWFF`, merchant
+  `GBGHMQGD7QJNGTZUCTZZUY2EO4BWF37K2K6MQCNO7IJJHCYQGTBUERV2`, relayer (separate identity, zero
+  spending authority) `GC4K72YTD7VGTDHTRAW3HLPUUURYWI6GRDICLSUAOOR3L6ULC2S5TDW3`
+- `approve` tx: `71b24d6385f3b9bd0f8971061c27e87a788a6ed71e2f840de83703be36ab25cd` (payer -> mandate
+  contract, 160,000,000 base units = 16.00 PUSD, expiring at ledger 4,030,818)
+- `create_mandate` tx: `e92c2a1c7f7c087f2d7829c7d981b6bb551219126dfcf86e1da669365390cd20`
+  (mandate id `4f7eb4876c43af54876e37a7ba9f1a96bc4192820fd62cbff8e2c334400f3205`, status `Active`
+  after create)
+- `charge` tx: `d3c60a613fd824331ef1ae1d54478d0c6b9d5c095b3791df731260eeb9245306` (payment id
+  `15a0062ec4fd4cc9797c7f0ef5a97c64ac40795b153bb1c90e63d14ceb32ca0b`, amount 50,000,000 base units
+  = 5.00 PUSD, merchant-authorized/relayer-submitted)
+- Mandate after charge: `status=Active successfulCharges=1/3 totalCollected=50000000
+  currentPeriodCollected=50000000` — read back through `getMandate`/`getPayment`, matching the
+  values `charge` returned in its own receipt exactly
+
+**Real SAC semantics vs. `mock-token`:** matched exactly. No divergence found — `approve`,
+`allowance`, and `transfer_from` behaved identically to the Phase 3-6 assumptions built and tested
+against `mock-token`. No stop condition triggered.
+
+**Merchant-authorizes/relayer-submits — the core trust assumption:** proven working end-to-end
+with three genuinely distinct Stellar identities (not the same key wearing different hats). Auth
+entries were assembled via `AssembledTransaction.signAuthEntries({ address: merchant.publicKey,
+authorizeEntry: merchant.authorizeEntry })`, where `authorizeEntry` is a function matching
+`@stellar/stellar-sdk`'s own `authorizeEntry(entry, signer, validUntilLedgerSeq,
+networkPassphrase, forAddress?)` signature that ignores the SDK's internally-constructed
+2nd-argument signing callback and calls the base `authorizeEntry` with the merchant's real
+`Keypair` directly instead — the relayer's `Client` (constructed with the relayer as
+`publicKey`/`signTransaction`) then signs and submits the outer transaction envelope. No custom
+cryptography was hand-rolled anywhere in this path.
+
+**Commands run (all passed):**
+```
+pnpm install
+pnpm lint
+pnpm typecheck
+pnpm build
+pnpm test                            (14 packages; 79 new TS tests: 12 contract-client +
+                                       47 shared + 8 stellar + existing 4 config, all pass)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-token, unchanged
+                                       from Phase 6 — no contract logic touched this phase)
+tsx scripts/deploy-testnet.ts         (real testnet deploy, see results above)
+tsx scripts/create-demo-mandate.ts    (real testnet create+charge, see results above)
+```
+
+**Deviations from spec (flagged, not silent):**
+- `packages/contract-client/tsconfig.json` scopes off two strict-config flags *for this package
+  only* (`lib` gains `"DOM"`, `noImplicitOverride: false`) — required for the generated bindings
+  file to typecheck as-is; every other package keeps the base config's full strictness. Documented
+  in the tsconfig itself and in `docs/architecture.md`.
+- `MandateSchema`'s `lastChargedAt` field skips the compile-time schema-matches-domain-type
+  assertion the other schemas have, for the Zod optional-vs-undefined reason described above.
+
+**Unverified / left for later phases:** no load/concurrency testing of the relayer-submits flow
+(single sequential demo run only) — that's Phase 9's job once a real relayer worker exists. No
+`pause_mandate`/`resume_mandate`/`revoke_mandate`/`refund` exercised against the live network in
+this phase's demo script (only `create_mandate` + one `charge`) — those already have full
+contract-level proof from Phase 2-6's test suites and don't change based on which token they run
+against, so re-proving them against testnet specifically was judged lower-value than the
+asset/auth-flow proof this phase actually needed; a natural target for Phase 9's relayer
+integration tests once that worker exists. `apps/api`/`apps/relayer` do not yet read
+`deployments/testnet.json` or `MANDATE_CONTRACT_ID` from a live environment (Phase 8+).

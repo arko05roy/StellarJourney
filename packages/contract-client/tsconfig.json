@@ -3,7 +3,19 @@
   "compilerOptions": {
     "outDir": "dist",
     "rootDir": "src",
-    "types": ["node"]
+    "types": ["node"],
+    // DOM is needed only for `src/generated/mandate-registry.ts`'s
+    // `typeof window !== "undefined"` Buffer-polyfill guard (the codegen
+    // tool's own boilerplate, present so the same bindings work in a
+    // browser bundle too) — every hand-written file in this package is
+    // Node-only.
+    "lib": ["ES2022", "DOM"],
+    // The generated `Client` class (same file) overrides `ContractClient`
+    // members without an `override` modifier, since `stellar contract
+    // bindings typescript` doesn't emit one. Scoped off only for this
+    // package, which is otherwise almost entirely generated code — every
+    // other package keeps the base config's `noImplicitOverride: true`.
+    "noImplicitOverride": false
   },
   "include": ["src"]
 }
