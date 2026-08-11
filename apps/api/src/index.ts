@@ -20,6 +20,9 @@ async function main(): Promise<void> {
     prisma,
     mandateReader,
     hashSecret: env.API_KEY_HASH_SECRET,
+    webhookEncryptionKey: env.WEBHOOK_ENCRYPTION_KEY,
+    // `allowInsecureWebhookHttp` intentionally omitted (defaults to false) —
+    // production never accepts http:// webhook URLs (CLAUDE.md §12 decision #8).
     logger: true,
   });
 

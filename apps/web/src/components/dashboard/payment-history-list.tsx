@@ -7,7 +7,8 @@
  * support (CLAUDE.md §8).
  */
 import { CheckCircle2, ShieldCheck } from "lucide-react";
-import { decimalToBaseUnits } from "@paymap/shared";
+// Narrow subpath import — see `apps/web/src/lib/format.ts`'s identical comment.
+import { decimalToBaseUnits } from "@paymap/shared/money";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatAmount, formatAssetSymbol, formatDateTime } from "@/lib/format";

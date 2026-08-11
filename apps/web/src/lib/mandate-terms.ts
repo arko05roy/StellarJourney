@@ -12,7 +12,8 @@
  * `Number` arithmetic on amounts anywhere in this module, so nothing here
  * can silently lose precision or overflow for a realistic token supply.
  */
-import { decimalToBaseUnits } from "@paymap/shared";
+// Narrow subpath import — see `apps/web/src/lib/format.ts`'s identical comment.
+import { decimalToBaseUnits } from "@paymap/shared/money";
 import type { PublicProduct } from "./api";
 
 export type AmountRule = { kind: "fixed"; amount: bigint } | { kind: "variable"; maxPerCharge: bigint };

@@ -105,6 +105,9 @@ importers:
       ioredis:
         specifier: ^5.4.2
         version: 5.11.1
+      undici:
+        specifier: ^7.2.0
+        version: 7.29.0
     devDependencies:
       '@stellar/stellar-sdk':
         specifier: ^16.1.0
@@ -243,10 +246,23 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(jsdom@30.0.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)
 
   packages/sdk:
+    dependencies:
+      '@paymap/shared':
+        specifier: workspace:*
+        version: link:../shared
     devDependencies:
       '@paymap/config':
         specifier: workspace:*
         version: link:../config
+      '@paymap/stellar':
+        specifier: workspace:*
+        version: link:../stellar
+      '@types/node':
+        specifier: ^22.10.5
+        version: 22.20.1
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(jsdom@30.0.0(@noble/hashes@2.2.0))(lightningcss@1.32.0)
 
   packages/shared:
     dependencies:

@@ -237,6 +237,25 @@ export async function processChargeRequest(deps: PipelineDeps, chargeRequestId: 
         eventType: "payment.succeeded",
         payload: { chargeRequestId, paymentId, mandateId: chargeRequest.mandateId, chargeId: chargeRequest.chargeId, transactionHash: result.txHash },
       });
+      // `mandate.completed` producer: no on-chain event indexer exists in
+      // this codebase (see this module's own doc history and
+      // `docs/merchant-api.md`'s "webhook event producers" section), so
+      // this is the *only* place a completion can be detected without one —
+      // the relayer already holds the pre-charge `mandate` (step 2, fresh
+      // on-chain read) with its `successfulCharges`/`maxSuccessfulCharges`.
+      // `create_mandate`'s own validation (contracts/mandate-registry) never
+      // allows a charge that would exceed `max_successful_charges`, so a
+      // successful charge that brings the count to exactly the max is
+      // deterministically the one that flips the mandate to `Completed`.
+      // `maxSuccessfulCharges === 0` means "unlimited" (PLAN.md §10.8) —
+      // never completes on count alone.
+      if (mandate.maxSuccessfulCharges > 0 && mandate.successfulCharges + 1 === mandate.maxSuccessfulCharges) {
+        await enqueueChargeWebhook(tx, {
+          merchantId: chargeRequest.merchantId,
+          eventType: "mandate.completed",
+          payload: { mandateId: chargeRequest.mandateId },
+        });
+      }
     });
     log("info", "charge_request.succeeded", { chargeRequestId, paymentId, txHash: result.txHash });
     return { kind: "succeeded", paymentId, txHash: result.txHash };

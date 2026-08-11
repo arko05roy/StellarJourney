@@ -10,6 +10,7 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import rateLimit from "@fastify/rate-limit";
 import cors from "@fastify/cors";
 import { ZodError } from "zod";
+import type { HostResolver } from "@paymap/shared";
 import { ApiError } from "./errors.js";
 import type { MandateReader } from "./chain/mandate-reader.js";
 import type { PrismaClient } from "./db.js";
@@ -28,6 +29,11 @@ declare module "fastify" {
     mandateReader: MandateReader;
     hashSecret: string;
     now: () => Date;
+    webhookEncryptionKey: string;
+    /** Permits `http://` webhook URLs — never true in production; local-dev/test only (CLAUDE.md §12/§16, this phase's SSRF decision). */
+    allowInsecureWebhookHttp: boolean;
+    /** Injectable DNS resolver for the webhook-URL SSRF guard — tests avoid a real lookup; production omits this and gets `node:dns`. */
+    resolveWebhookHost: HostResolver | undefined;
   }
 }
 
@@ -35,6 +41,9 @@ export interface BuildAppOptions {
   prisma: PrismaClient;
   mandateReader: MandateReader;
   hashSecret: string;
+  webhookEncryptionKey: string;
+  allowInsecureWebhookHttp?: boolean;
+  resolveWebhookHost?: HostResolver;
   /** Injectable clock — defaults to the real wall clock. Tests use a fixed instant for deterministic boundary assertions. */
   now?: () => Date;
   logger?: boolean;
@@ -47,6 +56,9 @@ export function buildApp(options: BuildAppOptions): FastifyInstance {
   app.decorate("mandateReader", options.mandateReader);
   app.decorate("hashSecret", options.hashSecret);
   app.decorate("now", options.now ?? (() => new Date()));
+  app.decorate("webhookEncryptionKey", options.webhookEncryptionKey);
+  app.decorate("allowInsecureWebhookHttp", options.allowInsecureWebhookHttp ?? false);
+  app.decorate("resolveWebhookHost", options.resolveWebhookHost);
 
   // Permissive by design, not an oversight: the only routes a browser ever
   // calls cross-origin are the *unauthenticated* checkout-session endpoints

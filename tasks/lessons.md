@@ -528,3 +528,60 @@
   assertion is "the card leaves this tab, and reappears under the tab that now matches its new
   status," which is also arguably the more honest UX for a nav split that already has a dedicated
   "Paused & ended" tab.
+- The WHATWG `URL` parser keeps the enclosing `[...]` on an IPv6 literal
+  hostname (`new URL("https://[::1]/").hostname === "[::1]"`) — any
+  `net.isIP`/DNS-shaped check downstream needs the bracket stripped first,
+  or every IPv6-literal branch silently falls through to "not a recognized
+  IP" / triggers an unwanted DNS lookup instead of matching. Also: `net.isIP`
+  and `URL` both *normalize* a dotted-quad IPv4-mapped IPv6 literal
+  (`::ffff:127.0.0.1`) to its compressed-hex form (`::ffff:7f00:1`) — a
+  regex written only against the dotted form silently misses the normalized
+  one. Handle both forms explicitly (expand the `::`-compressed hextets by
+  hand and decode the last 32 bits as two byte-pairs) rather than assuming
+  either representation survives untouched.
+- The "a Client Component value-importing anything from a workspace
+  package's barrel drags in the barrel's entire re-export graph, including
+  Node-only modules the import never touches" failure mode (first hit with
+  `@paymap/contract-client`, see the earlier lesson above) recurs for *any*
+  package whenever a new Node-only module is added to an already-consumed
+  barrel — not just the original package. Adding three new `node:crypto`/
+  `node:dns`/`node:net`-using modules to `@paymap/shared`'s barrel broke
+  `apps/web`'s `next build` even though the browser code only ever imported
+  `decimalToBaseUnits`/`baseUnitsToDecimalString` (pure, from `money.ts`).
+  Same fix as before: add narrow subpath `exports` (`"./money"`, `"./types"`)
+  and repoint the browser-bundled importers at the subpath. Treat this as a
+  standing rule for this repo: before adding a Node-only module (crypto/dns/
+  net/fs) to any package's barrel that `apps/web` also consumes, check
+  `grep -rn "@paymap/<pkg>"` under `apps/web/src` first, and add a subpath
+  export proactively rather than discovering the break at `pnpm build` time.
+- Node's global `fetch`'s `RequestInit` type (from `@types/node`, no `DOM`
+  lib) does not export a top-level `RequestInfo` type name the way `lib.dom`
+  does — a test helper typed as `(input: RequestInfo | URL, init?: ...)`
+  fails to compile ("cannot find name `RequestInfo`") in a `tsconfig` with
+  `types: ["node"]` only. Use `Parameters<typeof fetch>[0]` /
+  `Parameters<typeof fetch>[1]` instead of naming the DOM-lib type directly
+  — resolves correctly regardless of which lib set is configured.
+- Under `exactOptionalPropertyTypes: true`, `fetch(url, { body: maybeString
+  })` where `maybeString: string | undefined` fails to typecheck even though
+  `RequestInit.body` is nominally `BodyInit | null | undefined` — the
+  *inferred object literal's* `body` property becomes `string | undefined`
+  (assignable) vs. the target wanting the key entirely optional/absent when
+  unset. Same fix as every other `exactOptionalPropertyTypes` hit in this
+  repo: conditionally spread the key (`...(body !== undefined ? { body:
+  JSON.stringify(body) } : {})`) rather than passing `undefined` as a value.
+- `undici`'s `Agent({ connect: { lookup } })` is the correct primitive for
+  "pin this one HTTP request's actual TCP connection to a pre-validated IP
+  while still using the real hostname for TLS SNI and the `Host` header" —
+  needed for closing a DNS-rebinding TOCTOU gap between an SSRF
+  allow-list check and the real connect a few milliseconds later. Import
+  `fetch` from the `undici` package itself (not Node's ambient global
+  `fetch`) when you need to pass a `dispatcher` option — the global
+  `fetch`'s TS types (from `@types/node`) don't reliably include
+  `dispatcher` in `RequestInit`, but `undici`'s own exported `fetch` does.
+- A merchant-registered webhook secret needs both an encrypted-at-rest
+  storage format *and* a way for tests to prove round-trip correctness
+  without ever asserting against the plaintext secret value inside a stored
+  ciphertext string — `expect(encrypted).not.toContain(secret)` plus a
+  separate `decryptWebhookSecret(encrypted, key) === secret` assertion is
+  the right pair of checks; asserting only the second one would still pass
+  even if encryption were accidentally a no-op wrapper.

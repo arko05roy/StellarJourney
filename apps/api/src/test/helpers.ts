@@ -7,6 +7,7 @@
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import { randomBytes } from "node:crypto";
 import type { FastifyInstance } from "fastify";
+import type { HostResolver } from "@paymap/shared";
 import { buildApp } from "../app.js";
 import { createPrismaClient, type PrismaClient } from "../db.js";
 import { createMerchantWithApiKey } from "../auth/api-key.js";
@@ -14,6 +15,17 @@ import type { Mandate, MandateStatus } from "@paymap/contract-client";
 import { MandateReadError, type MandateReader } from "../chain/mandate-reader.js";
 
 export const TEST_HASH_SECRET = "test-hash-secret-pepper";
+export const TEST_WEBHOOK_ENCRYPTION_KEY = "test-webhook-encryption-key-material";
+
+/**
+ * Test double for the SSRF guard's DNS step (`@paymap/shared`'s
+ * `assertSafeWebhookUrl`) — resolves every hostname to a fixed public IP so
+ * route tests exercise real request/response wiring without a real network
+ * DNS lookup (flaky/sandbox-unfriendly) or needing to know test hostnames'
+ * real addresses. The guard's own DNS-resolution and IP-range logic has
+ * dedicated unit coverage in `packages/shared/src/webhook-url-guard.test.ts`.
+ */
+export const fakePublicHostResolver: HostResolver = async () => [{ address: "93.184.216.34", family: 4 }];
 
 export function createTestPrisma(): PrismaClient {
   return createPrismaClient();
@@ -124,6 +136,8 @@ export function buildTestApp(): TestApp {
     prisma,
     mandateReader,
     hashSecret: TEST_HASH_SECRET,
+    webhookEncryptionKey: TEST_WEBHOOK_ENCRYPTION_KEY,
+    resolveWebhookHost: fakePublicHostResolver,
     now: () => state.now,
   });
   return {

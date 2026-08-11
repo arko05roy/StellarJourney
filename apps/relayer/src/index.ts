@@ -19,6 +19,9 @@ import { createChargeWorker } from "./worker.js";
 import { createChargeQueue, createRedisConnection } from "./queue.js";
 import { startScheduler } from "./scheduler.js";
 import type { Logger } from "./pipeline.js";
+import { createWebhookDeliveryWorker } from "./webhook-worker.js";
+import { createWebhookDeliveryQueue } from "./webhook-queue.js";
+import { startWebhookScheduler } from "./webhook-scheduler.js";
 
 const consoleLogger: Logger = (level, event, fields) => {
   const line = `[relayer] ${event} ${JSON.stringify(fields)}`;
@@ -47,12 +50,27 @@ async function main(): Promise<void> {
   const worker = createChargeWorker({ connection, prisma, gateway, logger: consoleLogger });
   const stopScheduler = startScheduler(prisma, queue);
 
+  const webhookQueue = createWebhookDeliveryQueue(connection);
+  const webhookWorker = createWebhookDeliveryWorker({
+    connection,
+    prisma,
+    webhookEncryptionKey: config.webhookEncryptionKey,
+    // http:// webhook URLs are never permitted in production (CLAUDE.md
+    // §12/§16's SSRF decision) — `allowInsecureWebhookHttp` intentionally
+    // omitted here, defaulting to false.
+    logger: consoleLogger,
+  });
+  const stopWebhookScheduler = startWebhookScheduler(prisma, webhookQueue);
+
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
       void (async () => {
         stopScheduler();
+        stopWebhookScheduler();
         await worker.close();
+        await webhookWorker.close();
         await queue.close();
+        await webhookQueue.close();
         await prisma.$disconnect();
         process.exit(0);
       })();

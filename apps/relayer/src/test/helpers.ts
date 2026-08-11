@@ -7,6 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { Keypair, StrKey } from "@stellar/stellar-sdk";
 import { decodeMandateErrorName, type MandateContractError } from "@paymap/stellar";
+import { encryptWebhookSecret, generateWebhookSecret } from "@paymap/shared";
 import type { Mandate, PaymentReceipt } from "@paymap/contract-client";
 import { MandateReadError } from "@paymap/contract-client";
 import { createPrismaClient, type PrismaClient } from "../db.js";
@@ -14,6 +15,29 @@ import type { ChainGateway, ChargeArgs, ChargeSubmitResult, PreparedCharge } fro
 
 export function createTestPrisma(): PrismaClient {
   return createPrismaClient();
+}
+
+export const TEST_WEBHOOK_ENCRYPTION_KEY = "relayer-test-webhook-encryption-key";
+
+export interface TestMerchantWithWebhook {
+  merchantId: string;
+  webhookUrl: string;
+  /** The raw (never-stored) secret — only `encryptWebhookSecret(rawSecret, TEST_WEBHOOK_ENCRYPTION_KEY)` is persisted, mirroring production. */
+  rawSecret: string;
+}
+
+/** Creates a `Merchant` row with a real (encrypted-at-rest) webhook endpoint configured — the fixture `webhook-delivery.test.ts` needs. */
+export async function createMerchantWithWebhook(prisma: PrismaClient, webhookUrl: string): Promise<TestMerchantWithWebhook> {
+  const rawSecret = generateWebhookSecret();
+  const merchant = await prisma.merchant.create({
+    data: {
+      name: "Test Merchant",
+      walletAddress: Keypair.random().publicKey(),
+      webhookUrl,
+      webhookSecret: encryptWebhookSecret(rawSecret, TEST_WEBHOOK_ENCRYPTION_KEY),
+    },
+  });
+  return { merchantId: merchant.id, webhookUrl, rawSecret };
 }
 
 /**

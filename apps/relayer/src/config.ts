@@ -13,11 +13,18 @@ export interface RelayerConfig {
   redisUrl: string;
   deployment: DeploymentRecord;
   relayerSigner: KeypairSigner;
+  webhookEncryptionKey: string;
 }
 
 export function loadRelayerConfig(): RelayerConfig {
   const env = getEnv();
   const deployment = loadDeployment(env.STELLAR_NETWORK);
   const relayerSigner = keypairSigner(env.RELAYER_SECRET_KEY);
-  return { databaseUrl: env.DATABASE_URL, redisUrl: env.REDIS_URL, deployment, relayerSigner };
+  return {
+    databaseUrl: env.DATABASE_URL,
+    redisUrl: env.REDIS_URL,
+    deployment,
+    relayerSigner,
+    webhookEncryptionKey: env.WEBHOOK_ENCRYPTION_KEY,
+  };
 }

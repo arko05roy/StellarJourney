@@ -15,9 +15,15 @@
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json",
-    "test": "echo \"no tests yet\" && exit 0"
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@paymap/shared": "workspace:*"
   },
   "devDependencies": {
-    "@paymap/config": "workspace:*"
+    "@paymap/config": "workspace:*",
+    "@paymap/stellar": "workspace:*",
+    "@types/node": "^22.10.5",
+    "vitest": "^2.1.8"
   }
 }

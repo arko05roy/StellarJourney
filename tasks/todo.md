@@ -225,16 +225,18 @@ the full rationale.
 
 ## Phase 12 — Merchant Dashboard + Webhooks + SDK
 
-- [ ] Dashboard: products, checkout links, mandates, upcoming, failed, payments, refunds, developers, webhooks
-- [ ] Webhook delivery worker: HMAC SHA-256, timestamp, event id, signature version, retry count header
-- [ ] Delivery state machine: pending → delivering → delivered | retry_scheduled → dead_letter
-- [ ] Stable event id across retries
-- [ ] All 8 events (CLAUDE.md §12)
-- [ ] `packages/sdk`: `checkoutSessions.create`, `charges.create`, `payments.refunds.create`, typed error codes, `verifyWebhook` helper
-- [ ] Every SDK method gets a working example in `docs/merchant-api.md`
-- [ ] Tests: signature verify, retry backoff, duplicate event handling, secret never in payload
+- [ ] Dashboard: products, checkout links, mandates, upcoming, failed, payments, refunds, developers, webhooks (Phase 12b — not this agent's slice)
+- [x] Webhook delivery worker: HMAC SHA-256, timestamp, event id, signature version, retry count header
+- [x] Delivery state machine: pending → delivering → delivered | retry_scheduled → dead_letter
+- [x] Stable event id across retries
+- [x] All 8 events wired where a producer can exist without an on-chain indexer (`payment.succeeded`, `payment.failed`, `mandate.completed`); the other 5 (`mandate.active/paused/resumed/revoked`, `refund.succeeded`) have no producer yet — documented, not stubbed (`docs/merchant-api.md`'s "which events actually have a producer today")
+- [x] `packages/sdk`: `checkoutSessions.create`, `charges.create`, `payments.refunds.create`, typed error codes, `verifyWebhook` helper
+- [x] Every SDK method gets a working example in `docs/merchant-api.md`
+- [x] Tests: signature verify, retry backoff, duplicate event handling, secret never in payload
 
-**Gate:** `pnpm test`; sample merchant app receives `payment.succeeded`.
+**Gate:** `pnpm test`; sample merchant app receives `payment.succeeded` — real local `node:http`
+receiver, real `sendWebhook`, real signature verification
+(`apps/relayer/src/webhook-delivery.test.ts`'s last `describe` block). Ran green.
 
 ---
 
@@ -1559,3 +1561,125 @@ Scene 5 (an actual relayer-submitted charge rejected with `MandateRevoked` after
 narrated in `docs/demo-script.md` but not re-proven here — it's already covered by Phase 2/3's
 contract test suites and Phase 9's relayer classifier; this phase only had to prove the consumer-
 facing display/copy for that rejection, which `failure-reasons.test.ts` does.
+
+### Phase 12a — Webhook Delivery + Merchant SDK (done; Phase 12b dashboard UI is a separate agent's slice)
+
+**What changed:** the webhook delivery worker (`apps/relayer`) and `packages/sdk`, per CLAUDE.md
+§12 and PLAN.md §17. Did not touch `apps/web` beyond two narrow subpath-import fixes forced by a
+`@paymap/shared` barrel change (below) — no dashboard UI work, that's Phase 12b.
+
+**Signing/encryption/SSRF primitives, `packages/shared`** (new, used by both `apps/api` and
+`apps/relayer`, and by `packages/sdk` for verification):
+- `webhook-signature.ts` — canonical string `{t}.{eventId}.{rawBody}`, HMAC-SHA256,
+  `Paymap-Signature: t=…,id=…,v1=…` header, constant-time verify with a tolerance window (default
+  300s, both directions).
+- `webhook-secret-crypto.ts` — AES-256-GCM, key derived via SHA-256 from `WEBHOOK_ENCRYPTION_KEY`
+  (already in the Phase 0 env schema, unused until now), versioned stored format
+  `v1:<iv>:<tag>:<ciphertext>`.
+- `webhook-url-guard.ts` — SSRF guard: protocol allowlist, IPv4/IPv6 private/loopback/link-local
+  range check (incl. IPv4-mapped IPv6 in both dotted and compressed-hex form), injectable DNS
+  resolver, and a narrow `allowPrivateAddresses` test-only escape hatch (never set by any
+  production code path) so the gate's real-local-receiver test could run in this sandbox.
+- 91 new tests in `packages/shared` (55 for these three modules).
+
+**Merchant API additions, `apps/api`:** `POST /v1/webhook-endpoints` (register/rotate a real
+webhook URL + secret, secret shown once, encrypted at rest) and `GET /v1/webhook-endpoints`
+(status only) — neither existed before; the Phase 8 `/test` endpoint only ever validated a
+candidate URL, never persisted one, so there was no way to actually configure a merchant's
+delivery target until now. `webhook-state-machine.ts` (new — `WebhookDelivery`'s guarded
+transition table, mirrors `state-machine.ts` exactly, reused by `apps/relayer` via the same
+deep-import-to-built-output convention as `ChargeRequest`'s). 43 new/updated `apps/api` tests.
+
+**Delivery worker, `apps/relayer`:** new BullMQ queue/worker/scheduler
+(`webhook-{queue,worker,scheduler}.ts`, deterministic job id = `webhookDelivery.id`, mirrors the
+existing charge pipeline's wiring exactly) driving `webhook-delivery.ts`'s per-row pipeline: guarded
+DB claim → decrypt secret → assemble the envelope fresh from the row's own columns (the payload
+column stores only event `data`, never a redundant copy of the wrapper) → sign+send
+(`webhook-http.ts`, which re-runs the SSRF guard immediately before sending and *pins* the TCP
+connection to the pre-validated address via `undici`'s custom `Agent` lookup, closing the
+DNS-rebinding TOCTOU gap; redirects are never followed) → classify
+(`webhook-classify.ts`) → transition to `delivered`/`retry_scheduled`/`dead_letter`.
+`webhook-retry-schedule.ts`: 1 initial + 5 retries (+1m, +5m, +30m, +2h, +6h, ~8.5h total) then
+`dead_letter`. `mandate.completed` wired into the existing charge pipeline (`pipeline.ts`) — the
+pipeline already holds the fresh pre-charge `Mandate` read, so a successful charge that brings
+`successfulCharges` to exactly `maxSuccessfulCharges` deterministically completed the mandate, no
+indexer needed. 102 relayer tests total (46 new: classify, retry-schedule, delivery pipeline incl.
+duplicate-delivery/event-id-stability/no-secret-in-payload, scheduler, and the real-HTTP-receiver
+gate test).
+
+**`packages/sdk`:** `StellarMandates` client (`checkoutSessions.{create,get}`,
+`charges.{create,get}`, `payments.{list,refunds.create}`, `mandates.get`), `verifyWebhook` (thin
+wrapper over `@paymap/shared`'s signature module — same logic signer and verifier both use, no
+drift possible), typed `StellarMandatesApiError`/`StellarMandatesNetworkError`, and a
+type-level-only mirror of the 24 frozen contract error codes (no runtime dependency on
+`@paymap/stellar`, which would otherwise pull `@stellar/stellar-sdk` into this small SDK's install
+size — a devDependency-only test asserts the two lists never drift). `charges.create` bridges
+PLAN.md §17's `invoiceId` (free-form string) to the API's required 32-byte-hex `invoiceHash` via
+`sha256(invoiceId)`, deterministically. All mutating calls auto-generate an `Idempotency-Key` when
+the caller omits one. 21 new tests.
+
+**Bug found and fixed along the way (not a Phase 12a feature, a pre-existing latent gap the new
+`@paymap/shared` barrel exports triggered):** `apps/web`'s `next build` broke —
+`node:crypto`/`node:dns`/`node:net` (from the three new webhook modules) reached the browser
+bundle through `@paymap/shared`'s root barrel, because a Client Component value-importing
+`decimalToBaseUnits`/`baseUnitsToDecimalString` from the bare package specifier drags in the
+barrel's *entire* re-export graph, not just the one function actually used (same class of bug
+`packages/contract-client` hit and fixed in an earlier phase — see `tasks/lessons.md`). Fixed by
+adding narrow `./money`/`./types` subpath exports to `packages/shared/package.json` and updating
+the three `apps/web` call sites (`format.ts`, `mandate-terms.ts`, `payment-history-list.tsx`) to
+import from `@paymap/shared/money` instead of the bare specifier — zero behavior change, `apps/web`
+build/tests unaffected otherwise.
+
+**Documented, not silently stubbed — 5 of the 8 webhook events have no producer yet:**
+`mandate.active`/`paused`/`resumed`/`revoked` are contract calls the payer's wallet submits
+directly from `apps/web` (Phase 10/11 checkout + dashboard) — this API never observes them, and
+closing that gap needs either a real on-chain event indexer or new backend-notification wiring in
+`apps/web` (frontend work outside this phase's slice). `refund.succeeded` has no producer because
+no relayer pipeline exists yet that actually *submits* a refund transaction on-chain (Phase 8's
+`POST /v1/payments/:id/refunds` only ever creates a `RefundRequest` row in `scheduled` — there is
+no "succeeded" to report). Full detail in `docs/merchant-api.md`'s "which events actually have a
+producer today" table. This mirrors the task brief's own explicit anticipation of this gap — not a
+surprise finding.
+
+**Commands run (all passed):**
+```
+docker compose up -d
+pnpm install
+pnpm lint                            (16/16 tasks)
+pnpm typecheck                       (16/16 tasks)
+pnpm build                           (10/10 tasks — apps/web next build succeeds again post-fix)
+pnpm test                            (16/16 tasks; +91 packages/shared, +43 apps/api net,
+                                       +46 apps/relayer net, +21 packages/sdk; apps/web unchanged: 85)
+pnpm test:e2e                        (apps/web: 6/6 Playwright, unchanged — no web UI touched)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace               (136 mandate-registry [1 ignored] + 9 mock-token, unchanged)
+```
+
+**Deviations flagged:**
+- Signature header is one combined `Paymap-Signature: t=…,id=…,v1=…` value (Stripe-style) rather
+  than three separate headers — still carries all three required fields (timestamp, event id,
+  signature version) per CLAUDE.md §12, just packed into one header. Documented precisely in
+  `docs/merchant-api.md` for cross-language reimplementation.
+- `WebhookDelivery.attemptCount`/state transitions have no persisted `failureCode` column (unlike
+  `ChargeRequest`) — the classified reason is logged (`webhook_delivery.dead_letter` /
+  `.retry_scheduled` structured log events) but not stored on the row. A future phase could add the
+  column; not done here to avoid an unrequested schema migration.
+- `POST /v1/webhook-endpoints` always issues a brand-new secret on every call (register ==
+  rotate) rather than having a separate explicit rotate endpoint — simpler API surface, and matches
+  the "only shown once" API-key precedent; flagged in case the lead wants register and rotate to be
+  distinct operations.
+- `allowPrivateAddresses`/`allowInsecureHttp` test-only flags in the SSRF guard are real, callable
+  options on `assertSafeWebhookUrl`/`sendWebhook`/`processWebhookDelivery` (not compiled out) —
+  every production call site (`apps/api`'s route, `apps/relayer`'s real worker wiring in `index.ts`)
+  omits them, so they default to `false`, but they exist as live code paths. Flagged as a
+  judgment call rather than something more invasive (e.g. a separate test-only build target).
+
+**Unverified / left for later phases:** no real testnet/production webhook delivery run (only the
+local `node:http` receiver test) — there is no deployed merchant server to POST to yet. The
+BullMQ worker/scheduler loop itself was exercised via direct pipeline-function calls
+(`processWebhookDelivery`) and a real-Redis queue/scheduler test, not by actually starting
+`apps/relayer`'s `index.ts` process end-to-end — matches the existing charge-pipeline testing
+convention (`pipeline.test.ts` does the same). Phase 12b (merchant dashboard UI, a separate agent)
+will need a way to show webhook delivery status/history to merchants — no UI for that exists yet,
+by design (out of this phase's scope).

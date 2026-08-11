@@ -5,7 +5,15 @@
  * (CLAUDE.md §9). This module only turns already-exact values into
  * human-readable strings for the review screen.
  */
-import { baseUnitsToDecimalString } from "@paymap/shared";
+// Narrow subpath import, not the root `@paymap/shared` barrel — the root
+// barrel now also re-exports Phase 12a's webhook signing/encryption/SSRF
+// modules, which pull in `node:crypto`/`node:dns`/`node:net` and break the
+// client bundle if reached through a *value* import (a browser Client
+// Component importing only `baseUnitsToDecimalString` still drags in the
+// whole barrel's module graph otherwise — see `packages/shared/package.json`'s
+// `./money` export and CLAUDE.md-lessons.md's identical prior fix for
+// `@paymap/contract-client`).
+import { baseUnitsToDecimalString } from "@paymap/shared/money";
 
 /** Renders base units as a trimmed decimal string for display (e.g. `"15.00"` not `"15.0000000"`) — full precision is preserved by `baseUnitsToDecimalString`; this only trims cosmetic trailing zeros, and never rounds. */
 export function formatAmount(amount: bigint, decimals: number): string {

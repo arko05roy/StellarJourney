@@ -1,6 +1,7 @@
 # Merchant API
 
-Phase 8. Base URL (local): `http://localhost:3001`. All endpoints are versioned under `/v1`.
+Phase 8 (core endpoints), extended in Phase 12a (webhook registration + delivery, `@paymap/sdk`).
+Base URL (local): `http://localhost:3001`. All endpoints are versioned under `/v1`.
 
 The contract is the policy authority (CLAUDE.md §1). This API is a workflow layer around it: it
 verifies on-chain mandate state before accepting a charge, schedules work for the relayer
@@ -9,16 +10,21 @@ confirmed on-chain result.
 
 ## Scope note: endpoints beyond PLAN.md §14's literal list
 
-PLAN.md §14 lists ten endpoints. Two more exist and are documented here, because CLAUDE.md §10
-explicitly requires API-key **issuance** and **rotation**, with the full key shown exactly once —
-and there is no way to obtain the first key without *some* endpoint:
+PLAN.md §14 lists ten endpoints. Four more exist and are documented here:
 
 ```text
 POST   /v1/merchants                       (bootstrap: create a merchant + first API key)
 POST   /v1/merchants/me/api-keys/rotate    (rotate: issue a new key, revoke the old one)
+POST   /v1/webhook-endpoints               (Phase 12a: register/rotate the real delivery URL + secret)
+GET    /v1/webhook-endpoints               (Phase 12a: status read, never the secret)
 ```
 
-Everything else matches PLAN.md §14 exactly.
+The first two exist because CLAUDE.md §10 explicitly requires API-key **issuance** and
+**rotation**, with the full key shown exactly once, and there is no way to obtain the first key
+without *some* endpoint. The webhook-endpoints pair exists because real signed delivery
+(CLAUDE.md §12) needs somewhere to register a URL and secret — `PLAN.md §14`'s
+`POST /v1/webhook-endpoints/test` alone only ever validated a candidate URL, it never persisted
+one. Everything else matches PLAN.md §14 exactly.
 
 ## Authentication
 
@@ -379,15 +385,45 @@ schedules.
 { "id": "…", "paymentId": "…", "refundId": "<64 hex>", "amount": "5.00", "status": "scheduled", "createdAt": "2026-…Z" }
 ```
 
+### `POST /v1/webhook-endpoints` (Phase 12a)
+
+Registers — or rotates, on a repeat call — the merchant's real delivery endpoint. The URL must
+pass the SSRF guard below. A fresh secret is generated and shown **exactly once**, here; only its
+encrypted form (`WEBHOOK_ENCRYPTION_KEY`, AES-256-GCM) is ever persisted.
+
+```json
+{ "url": "https://merchant.example.com/webhooks/paymap" }
+```
+
+→ `201`
+
+```json
+{ "webhookUrl": "https://merchant.example.com/webhooks/paymap", "webhookSecret": "whsec_…" }
+```
+
+Calling this again overwrites the URL and issues a brand-new secret — the old secret stops
+verifying immediately. `400 INVALID_URL` / `400 INVALID_PROTOCOL` / `400 INSECURE_PROTOCOL` /
+`400 BLOCKED_HOST` / `400 DNS_RESOLUTION_FAILED` if the URL fails the SSRF guard (see below).
+
+### `GET /v1/webhook-endpoints` (Phase 12a)
+
+Status only — never returns the secret in any form.
+
+```json
+{ "configured": true, "webhookUrl": "https://merchant.example.com/webhooks/paymap" }
+```
+
 ### `POST /v1/webhook-endpoints/test`
 
 ```json
 { "url": "https://example.com/webhooks/paymap" }
 ```
 
-Non-`http(s)` URLs are rejected (`400 VALIDATION_ERROR`). Queues a `webhook.test` event as a
-`WebhookDelivery` row in `pending` — **no live HTTP call is made** (the delivery worker is Phase
-12; making a real outbound request here would also need the SSRF hardening Phase 14 adds).
+Validates the URL against the same SSRF guard as registration, then queues a `webhook.test` event
+as a `WebhookDelivery` row in `pending` — the delivery worker (below) actually POSTs it, signed
+with whatever secret the merchant currently has registered (via `POST /v1/webhook-endpoints`
+above). If no endpoint is registered yet, the row is still queued but the worker dead-letters it
+(`WEBHOOK_ENDPOINT_NOT_CONFIGURED`) rather than sending anywhere.
 
 → `202`
 
@@ -395,7 +431,9 @@ Non-`http(s)` URLs are rejected (`400 VALIDATION_ERROR`). Queues a `webhook.test
 { "id": "…", "eventId": "<64 hex>", "status": "pending", "createdAt": "2026-…Z" }
 ```
 
-## Webhook event types (payload shape only — delivery is Phase 12)
+## Webhooks (Phase 12a)
+
+### Event types
 
 ```text
 mandate.active
@@ -408,14 +446,265 @@ payment.failed
 refund.succeeded
 ```
 
-Every delivered webhook shares this envelope (CLAUDE.md §12):
+Every delivered webhook shares this envelope, assembled fresh by the delivery worker from the
+`WebhookDelivery` row's own columns at send time (`eventId` and `eventType` never change across
+retries — a receiver can safely dedupe on `eventId` alone):
 
 ```json
 { "eventId": "…", "eventType": "payment.succeeded", "createdAt": "2026-…Z", "signatureVersion": "v1", "data": { "…": "…" } }
 ```
 
-HMAC-SHA256 signing, retries, and the delivery state machine (`pending → delivering → delivered |
-retry_scheduled → dead_letter`) are Phase 12 scope.
+### Which events actually have a producer today
+
+This is the honest current state, not the aspirational one:
+
+| Event | Producer | Notes |
+| --- | --- | --- |
+| `payment.succeeded` | `apps/relayer`'s charge pipeline (Phase 9) | Enqueued in the same DB transaction as the `succeeded` transition. |
+| `payment.failed` | `apps/relayer`'s charge pipeline (Phase 9) | Enqueued on `permanently_failed` only — a `retry_scheduled` failure does not fire a webhook per attempt. |
+| `mandate.completed` | `apps/relayer`'s charge pipeline (Phase 12a) | Detected without an event indexer: the pipeline already holds the *pre-charge* on-chain `Mandate` (fresh read, step 2) with `successfulCharges`/`maxSuccessfulCharges`; a successful charge that brings the count to exactly the max deterministically completed the mandate (the contract never allows a charge that would exceed it), so the webhook is enqueued alongside `payment.succeeded` in that case. |
+| `mandate.active` | **none** | Fires (per PLAN.md) on mandate creation — but `create_mandate` is signed and submitted directly from the payer's wallet in the consumer checkout UI (Phase 10), never routed through this API. Nothing observes it. |
+| `mandate.paused` / `mandate.resumed` / `mandate.revoked` | **none** | Same reason — the consumer dashboard (Phase 11) calls `pause_mandate`/`resume_mandate`/`revoke_mandate` directly from the payer's wallet. This API only ever *reads* mandate state (`GET /v1/mandates/:id`); it has no way to know a state change happened unless something tells it. |
+| `refund.succeeded` | **none** | `POST /v1/payments/:id/refunds` only ever creates a `RefundRequest` row in `scheduled` (see that endpoint's docs above) — no relayer pipeline exists yet that actually submits a `refund` transaction on-chain and confirms it. There is no "succeeded" to report. |
+
+Closing the four `mandate.*` gaps for real requires one of: (a) an on-chain event indexer polling
+Soroban `get_events` and reconciling against `MandateIndex`, or (b) each direct-to-contract wallet
+action in `apps/web` also calling a new authenticated-but-verified backend endpoint afterward
+(mirroring `POST /checkout-sessions/:id/mandate`'s "trust nothing, re-verify on-chain" pattern).
+Both are real scope, not a one-line fix, and are deliberately **not** built as part of Phase 12a —
+building a full indexer to serve one webhook event would be exactly the "quietly stub it" this
+project's process explicitly says not to do. `refund.succeeded` similarly needs a full relayer
+refund-execution pipeline (the on-chain-submission mirror of the Phase 9 charge pipeline) before it
+can have a producer at all.
+
+### Signature scheme
+
+HMAC-SHA256, precise enough to reimplement in another language.
+
+**Canonical string** (exactly, no extra separators):
+
+```text
+{unixTimestampSeconds}.{eventId}.{rawRequestBodyBytes}
+```
+
+`rawRequestBodyBytes` is the *literal* HTTP body the delivery worker sends — sign the exact string
+that will be transmitted, never a re-serialization of the parsed object (whitespace/key-order can
+differ and would break verification even for a semantically-identical payload).
+
+**Signature:** `hex(HMAC_SHA256(merchantWebhookSecret, canonicalString))`
+
+**Header:** `Paymap-Signature: t={unixTimestampSeconds},id={eventId},v1={hexSignature}`
+
+All three of timestamp, event id, and signature version live in this one header, exactly as
+CLAUDE.md §12 requires. The timestamp is signed (not just attached) specifically so a captured
+request can't be replayed later with a forged fresh timestamp — the signature would no longer
+match.
+
+**Verification** (what `@paymap/sdk`'s `verifyWebhook` does, and what any independent
+implementation should do):
+
+1. Parse `t`, `id`, `v1` out of the `Paymap-Signature` header.
+2. Reject if `|now - t| > tolerance` (default 300s, both directions — this is the replay-protection
+   check).
+3. Recompute `hex(HMAC_SHA256(secret, "{t}.{id}.{rawBody}"))` and compare to `v1` with a
+   **constant-time** comparison (`node:crypto`'s `timingSafeEqual`, or your language's
+   equivalent) — never `===`/substring, which leaks a timing signal about how many digest bytes
+   matched.
+4. On success, the event's `id` is stable across every retry of the same event — dedupe on it.
+
+Never include API keys, private keys, webhook secrets, or internal stack traces in the delivered
+payload (verified by a dedicated test: `apps/relayer/src/webhook-delivery.test.ts`, "the signed
+payload never contains the merchant's API key or webhook secret").
+
+### Delivery state machine
+
+```text
+pending → delivering → delivered
+pending → delivering → retry_scheduled → delivering → … → dead_letter
+```
+
+Guarded, atomic `updateMany` transitions (`apps/api/src/webhook-state-machine.ts`, reused by
+`apps/relayer` via the same deep-import-to-built-output convention as `ChargeRequest`'s state
+machine) — a concurrent duplicate delivery job loses the claim and makes zero HTTP calls, which is
+the actual "duplicate job delivery → exactly one POST" guarantee (not BullMQ's own locking, which
+is only a first line of defense).
+
+### Retry / backoff schedule
+
+Exponential, six total attempts (1 initial + 5 retries) before `dead_letter`:
+
+| Attempt | Delay from previous |
+| --- | --- |
+| 1 | immediately (delivery becomes due) |
+| 2 | +1 minute |
+| 3 | +5 minutes |
+| 4 | +30 minutes |
+| 5 | +2 hours |
+| 6 | +6 hours |
+
+~8.5 hours total — enough to ride out a typical deploy/incident window on the receiving end
+without retrying forever. Defined in `apps/relayer/src/webhook-retry-schedule.ts`.
+
+### Response classification
+
+| Outcome | Class | Behavior |
+| --- | --- | --- |
+| HTTP 2xx | success | → `delivered` |
+| HTTP 408, 429 | retryable | → `retry_scheduled` (or `dead_letter` if exhausted) |
+| HTTP 5xx | retryable | → `retry_scheduled` (or `dead_letter` if exhausted) |
+| HTTP other 4xx | permanent | → `dead_letter` immediately, regardless of attempts remaining |
+| HTTP 3xx (redirect) | permanent | Never followed (`redirect: "manual"`) — see SSRF note below |
+| Request timeout (10s) | retryable | → `retry_scheduled` |
+| Network error (DNS/connect/reset) | retryable | → `retry_scheduled` |
+| SSRF guard blocked the URL | permanent | → `dead_letter` |
+
+Defined in `apps/relayer/src/webhook-classify.ts`.
+
+### SSRF protections on webhook URLs
+
+Enforced both at registration (`POST /v1/webhook-endpoints`) and, independently, immediately
+before every delivery attempt (`apps/relayer`, since DNS can change between registration and any
+given attempt):
+
+- Only `https://` is accepted (never `http://` in production — no env flag defaults it on).
+- The hostname's resolved address(es) — literal IP or via DNS — must not fall in a
+  loopback/private/link-local/reserved range: IPv4 `127/8`, `10/8`, `172.16/12`, `192.168/16`,
+  `169.254/16`, `100.64/10` (CGNAT), `0/8`, `224/4`+; IPv6 `::1`, `fc00::/7`, `fe80::/10`, and
+  IPv4-mapped addresses checked against the same IPv4 rules (both the dotted and compressed-hex
+  forms `::ffff:127.0.0.1` / `::ffff:7f00:1`).
+- **DNS rebinding**: the delivery worker doesn't just check-then-reconnect — it *pins* the actual
+  TCP connection to the exact address the check just resolved and approved
+  (`undici`'s `Agent({ connect: { lookup } } })`, still using the real hostname for TLS SNI/`Host`),
+  so a DNS record that changes between the check and the connect can't redirect the socket.
+- **Redirects are never followed** (`redirect: "manual"`) — a URL that itself passed the check
+  could otherwise bounce the request somewhere the check never saw; a redirect response is reported
+  as a permanent failure instead.
+
+Not covered: this is IP-range-based, not a full egress-network-policy solution — a merchant's own
+DNS infrastructure that resolves *at* the moment of the check to a public IP but is fronted by
+something that later proxies to an internal service is outside what an application-level check can
+see. `packages/shared/src/webhook-url-guard.ts` documents this precisely.
+
+## `@paymap/sdk`
+
+A small merchant-facing TypeScript SDK (PLAN.md §17). Every mutating method accepts an optional
+`idempotencyKey`; a `crypto.randomUUID()` is generated automatically when omitted, so every call is
+idempotent-safe by default.
+
+```ts
+import { StellarMandates } from "@paymap/sdk";
+
+const mandates = new StellarMandates({
+  apiKey: process.env.STELLAR_MANDATES_API_KEY!,
+  baseUrl: "https://api.paymap.example/v1", // defaults to http://localhost:3001/v1
+});
+```
+
+### `checkoutSessions.create`
+
+```ts
+const checkout = await mandates.checkoutSessions.create({
+  productId: "prod_monthly_ai",
+  clientReference: "customer_123",
+  successUrl: "https://merchant.example/success",
+  cancelUrl: "https://merchant.example/cancel",
+});
+```
+
+`successUrl`/`cancelUrl` match PLAN.md §17's call shape and are forwarded in the request body, but
+are **not yet enforced by the current API version** (`CreateCheckoutSessionSchema` doesn't model a
+post-checkout redirect target) — a documented gap, not a silent no-op: they're sent, not dropped,
+so a future API version can start honoring them with zero SDK changes.
+
+### `checkoutSessions.get`
+
+```ts
+const session = await mandates.checkoutSessions.get("cs_abc123");
+```
+
+### `charges.create`
+
+```ts
+await mandates.charges.create({
+  mandateId: "mandate_...",
+  amount: "15.00",
+  asset: "USDC",
+  invoiceId: "invoice_2026_08_001",
+  idempotencyKey: "invoice_2026_08_001",
+});
+```
+
+`invoiceId` (any merchant-chosen string) is hashed with SHA-256 client-side into the API's required
+32-byte `invoiceHash` — deterministically, so retrying with the same `invoiceId` is safe.
+`mandateId` becomes the URL path segment; `asset` is accepted for call-shape compatibility but not
+sent (the mandate's own on-chain asset is authoritative).
+
+### `charges.get`
+
+```ts
+const charge = await mandates.charges.get("cr_abc123");
+```
+
+### `payments.list`
+
+```ts
+const { data: payments } = await mandates.payments.list({ mandateId: "mandate_..." });
+```
+
+### `payments.refunds.create`
+
+```ts
+await mandates.payments.refunds.create({
+  paymentId: "pay_abc123",
+  amount: "5.00",
+});
+```
+
+### `mandates.get`
+
+```ts
+const mandate = await mandates.mandates.get("mandate_...");
+console.log(mandate.status); // "Active" | "Paused" | "Revoked" | "Completed" | "Expired"
+```
+
+### `verifyWebhook`
+
+```ts
+import { verifyWebhook, WebhookSignatureError } from "@paymap/sdk";
+
+// Express: mount with `express.text({ type: "*/*" })` for this route so
+// `req.body` is the exact raw string, not pre-parsed JSON.
+try {
+  const { eventId } = verifyWebhook(req.body, req.header("Paymap-Signature")!, process.env.WEBHOOK_SECRET!);
+  const event = JSON.parse(req.body);
+  // handle event, deduping on `eventId` (stable across retries)
+} catch (error) {
+  if (error instanceof WebhookSignatureError) {
+    return res.status(400).send(`invalid webhook signature: ${error.code}`); // "MALFORMED_HEADER" | "TIMESTAMP_OUT_OF_TOLERANCE" | "SIGNATURE_MISMATCH"
+  }
+  throw error;
+}
+```
+
+### Typed errors
+
+```ts
+import { StellarMandatesApiError, StellarMandatesNetworkError } from "@paymap/sdk";
+
+try {
+  await mandates.charges.create({ mandateId, amount: "25.00", invoiceId: "inv_1" });
+} catch (error) {
+  if (error instanceof StellarMandatesApiError) {
+    if (error.isContractError()) {
+      // error.code is narrowed to one of the 24 frozen mandate-contract error names
+      console.log(error.code); // e.g. "AmountExceedsChargeLimit"
+    }
+    console.log(error.httpStatus, error.code, error.message);
+  } else if (error instanceof StellarMandatesNetworkError) {
+    // the request itself never got a response (DNS/connect failure, timeout)
+  }
+}
+```
 
 ## Running the test suite
 

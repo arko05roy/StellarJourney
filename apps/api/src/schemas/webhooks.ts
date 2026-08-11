@@ -34,3 +34,9 @@ export const WebhookEndpointTestSchema = z.object({
   url: WebhookUrlSchema,
 });
 export type WebhookEndpointTestInput = z.infer<typeof WebhookEndpointTestSchema>;
+
+/** `POST /v1/webhook-endpoints` (Phase 12a) — registers/rotates the merchant's real delivery endpoint. Format-only here; the SSRF/private-range check (`@paymap/shared`'s `assertSafeWebhookUrl`) runs in the route handler, since it's async (DNS resolution) and Zod schemas must stay synchronous. */
+export const RegisterWebhookEndpointSchema = z.object({
+  url: WebhookUrlSchema,
+});
+export type RegisterWebhookEndpointInput = z.infer<typeof RegisterWebhookEndpointSchema>;

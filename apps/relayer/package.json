@@ -19,7 +19,8 @@
     "@paymap/stellar": "workspace:*",
     "@prisma/client": "^6.19.3",
     "bullmq": "^5.34.5",
-    "ioredis": "^5.4.2"
+    "ioredis": "^5.4.2",
+    "undici": "^7.2.0"
   },
   "devDependencies": {
     "@stellar/stellar-sdk": "^16.1.0",
