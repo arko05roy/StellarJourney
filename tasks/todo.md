@@ -2352,6 +2352,71 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 
 ---
 
+## Phase 24 - Level 4/5 Submission Audit
+
+### Plan
+
+- [x] Build a truthful requirement matrix for all supplied Level 4, Level 5, and technical items.
+- [x] Verify repository visibility, commit count, CI/CD, deployments, contract, transaction proofs,
+      tests, responsive UI, error/loading states, monitoring, documentation, deck, and workbook.
+- [x] Capture missing public screenshots that can be produced from real project state.
+- [x] Consolidate submission links, evidence, and blockers in the README and evidence tracker.
+- [x] Run documentation/link, artifact, and local code verification.
+- [ ] Commit and push verified improvements to `main`; confirm CI remains green.
+
+### Verification
+
+- [x] Public GitHub repository and 20+ meaningful commits
+- [x] Live frontend and API health
+- [x] Deployed testnet contract and transaction hashes
+- [x] Mobile, CI, test, and monitoring screenshots
+- [x] PPTX renders without overflow
+- [x] XLSX opens, formulas inspect cleanly, and contains no fabricated responses
+- [x] README links resolve
+- [x] Relevant lint, typecheck, tests, and build
+- [ ] GitHub Actions `CI` succeeds on final `main`
+
+### Files likely touched
+
+- `README.md`
+- `docs/level-5/submission-evidence.md`
+- `docs/level-5/evidence/*`
+- `tasks/todo.md`
+- `tasks/lessons.md`
+
+### Unresolved
+
+- Genuine 10/50-user cohort, feedback responses, and wallet-interaction proof require real users.
+- Google Form requires authenticated Google access.
+- Demo video requires recording and a public video host.
+
+### Review
+
+#### Changed
+
+- Added a truthful Level 4, Level 5, and advanced-technical requirement matrix.
+- Added reviewer-ready screenshots and capture provenance.
+- Linked all submission artifacts from the root README.
+- Added a team-review rubric without inventing reviewer scores.
+
+#### Verified
+
+- Public repository; 38 pre-audit commits; Vercel and Render HTTP 200.
+- Testnet contract interface and successful charge transaction.
+- Node lint, typecheck, build, and tests; Rust fmt, clippy, tests, and WASM build.
+- PPTX render/overflow checks; workbook formulas; local Markdown links; screenshot dimensions.
+
+#### Risks
+
+- Controlled stress accounts are technical evidence, not real users.
+- Google Form, genuine cohort data, feedback iteration, video, and reviewer sign-off remain external.
+
+#### Follow-ups
+
+- Complete the six external actions listed in `docs/level-5/submission-evidence.md`.
+
+---
+
 ## Phase 23 - Main Branch CI Repair
 
 ### Plan

@@ -2,31 +2,67 @@
 
 Recurring stablecoin payments with limits enforced by a Soroban contract. Payers authorize a bounded mandate and token allowance; merchants can collect only within the signed amount, time, frequency, and charge-count rules. Payers can pause or revoke immediately.
 
-## Level 5 submission
+## Submission readiness
 
-| Item                        | Evidence                                                                                             |
-| --------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Public repository           | <https://github.com/SachPlayZ/Paymap>                                                                |
-| Live application            | <https://paymap-web.vercel.app>                                                                      |
-| Live API                    | <https://paymap-demo-api.onrender.com/readyz>                                                        |
-| Pitch deck                  | [Download the Paymap Level 5 pitch deck (PPTX)](docs/level-5/Paymap-Level-5-Pitch-Deck.pptx)         |
-| Feedback workbook           | [`docs/level-5/Paymap-User-Feedback-Analysis.xlsx`](docs/level-5/Paymap-User-Feedback-Analysis.xlsx) |
-| Testnet transaction CSV     | [`52 verified transactions`](docs/level-5/evidence/testnet-stress-20260730045306-585217.csv)         |
-| Google Form specification   | [`docs/level-5/google-form-spec.md`](docs/level-5/google-form-spec.md)                               |
-| Submission evidence tracker | [`docs/level-5/submission-evidence.md`](docs/level-5/submission-evidence.md)                         |
-| Demo walkthrough            | Script ready in [`docs/demo-script.md`](docs/demo-script.md); public video link pending              |
+> [!IMPORTANT]
+> The technical product evidence is ready. The submission is **not yet fully Level 4 or Level 5
+> compliant** because genuine user responses, the public demo video, and team review have not been
+> supplied. Controlled stress wallets are never counted as real users.
+
+| Item                           | Status        | Evidence                                                                                                                            |
+| ------------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Public repository              | Ready         | <https://github.com/SachPlayZ/Paymap>                                                                                               |
+| Meaningful commits             | Ready         | 38 commits before this audit; requirements are 15+ / 20+                                                                            |
+| Live application               | Ready         | <https://paymap-web.vercel.app>                                                                                                     |
+| Live API and monitoring        | Ready         | [Readiness](https://paymap-demo-api.onrender.com/readyz) · [Prometheus metrics](https://paymap-demo-api.onrender.com/metrics)       |
+| Testnet contract               | Ready         | `CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22`                                                                          |
+| Contract interaction           | Ready         | [`charge` transaction](https://stellar.expert/explorer/testnet/tx/86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c) |
+| CI/CD                          | Ready         | [Green `main` workflow](https://github.com/SachPlayZ/Paymap/actions/runs/30532887659)                                               |
+| Pitch deck                     | Ready         | [Download the professional Level 5 deck](docs/level-5/Paymap-Level-5-Pitch-Deck.pptx)                                               |
+| Testnet activity               | Ready         | [52 verified transactions](docs/level-5/evidence/testnet-stress-20260730045306-585217.csv)                                          |
+| Feedback workbook              | Template only | [Formula-backed workbook; currently 0 responses](docs/level-5/Paymap-User-Feedback-Analysis.xlsx)                                   |
+| Google Form                    | Pending       | [Exact form specification](docs/level-5/google-form-spec.md); authenticated form creation still required                            |
+| Demo video                     | Pending       | [Recording script](docs/demo-script.md); public video URL still required                                                            |
+| Genuine user cohort            | Pending       | 10 real users for Level 4; 50 verified users for Level 5                                                                            |
+| Feedback-driven product commit | Pending       | Must be selected from genuine feedback; it will not be fabricated                                                                   |
+| Team review                    | Pending       | [Review rubric and sign-off sheet](docs/team-review.md)                                                                             |
+
+The exhaustive Level 4, Level 5, and technical requirement matrix is in
+[`docs/level-5/submission-evidence.md`](docs/level-5/submission-evidence.md).
+
+### Screenshots
+
+| Production UI                                                                   | Mobile responsive UI                                                       |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| ![Paymap production landing page](docs/level-5/evidence/product-ui-desktop.png) | ![Paymap mobile landing page](docs/level-5/evidence/product-ui-mobile.png) |
+
+![Wallet-first merchant onboarding](docs/level-5/evidence/merchant-wallet-onboarding.png)
+
+| Green CI/CD                                                               | Frontend tests                                                       |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| ![Green GitHub Actions workflow](docs/level-5/evidence/ci-main-green.png) | ![133 passing frontend tests](docs/level-5/evidence/test-output.png) |
+
+| Live monitoring                                                          | Testnet transaction                                                                            |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| ![Live Prometheus metrics](docs/level-5/evidence/monitoring-metrics.png) | ![Successful testnet charge transaction](docs/level-5/evidence/testnet-charge-transaction.png) |
+
+Screenshot sources and capture details are recorded in
+[`docs/level-5/evidence/README.md`](docs/level-5/evidence/README.md).
 
 ### Testnet activity proof
 
 - [`create_mandate` transaction](https://stellar.expert/explorer/testnet/tx/8e03653aeddaae57aa8f24176f2f5d51c395356fb97b1c8d75e3166ffbefd5d8)
 - [Relayer-submitted `charge` transaction](https://stellar.expert/explorer/testnet/tx/86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c)
 - [52-transaction stress run](docs/level-5/evidence/testnet-stress-20260730045306-585217.csv):
-  12 fresh addresses, 7 mandates, and 7 production-relayed charges; all hashes verified in Horizon
+  12 controlled addresses, 7 mandates, and 7 production-relayed charges; every hash is successful
+  in Horizon. This is technical load evidence, not real-user proof.
 - System E2E evidence and transaction context: [`docs/architecture.md`](docs/architecture.md)
 
 ### User feedback and next-phase improvement plan
 
-The current public evidence does **not** claim 50 users. Genuine responses must be collected with the specified Google Form, exported into the workbook, and verified against testnet transactions. Names and emails must be redacted before publication.
+Genuine responses must be collected with the specified Google Form, exported into the workbook,
+and paired with verified testnet transactions. Names and emails must be redacted before public
+publication.
 
 After collection:
 
@@ -36,7 +72,9 @@ After collection:
 4. Link the implementation commit and before/after evidence here.
 5. Re-run the same user flow and measure rating, completion, and verified-transaction changes.
 
-The evidence workflow, workbook, deck, and form specification were added in [commit `adf30fd`](https://github.com/SachPlayZ/Paymap/commit/adf30fd). The first feedback-driven product commit remains pending real responses; it will be linked here rather than invented.
+The evidence workflow, workbook, deck, and form specification were added in
+[commit `adf30fd`](https://github.com/SachPlayZ/Paymap/commit/adf30fd). The first
+feedback-driven product commit remains pending real responses and will be linked here.
 
 ## Deployed testnet contract
 
