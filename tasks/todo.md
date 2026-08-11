@@ -2291,7 +2291,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
       into Developers.
 - [x] Replace merchant onboarding with connect wallet, sign in, and new-profile completion states.
 - [x] Update architecture, merchant API docs, environment examples, and focused security tests.
-- [ ] Apply the Prisma migration, deploy API/web, and smoke-test the live authentication surface.
+- [x] Apply the Prisma migration, deploy API/web, and smoke-test the live authentication surface.
 
 ### Verification
 
@@ -2303,7 +2303,7 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
 - [x] `pnpm build`
 - [x] `pnpm test`
 - [x] `git diff --check`
-- [ ] Render API ready and Vercel merchant routes return 200
+- [x] Render API ready and Vercel merchant routes return 200
 
 ### Files likely touched
 
@@ -2329,19 +2329,23 @@ for indexer-produced events specifically beyond the existing webhook-deliveries 
   existing API-key integrations.
 - Added challenge/session persistence, a production migration, configuration, docs, and E2E
   coverage.
+- Bundled public contract deployment data into web server artifacts so Vercel merchant, checkout,
+  and dashboard routes do not depend on build-time filesystem paths.
 
 #### Verified
 
 - Prisma migration applied to both existing API and relayer test schemas; schema validation passes.
-- All 638 package tests and 8 Playwright flows pass.
+- All 640 package tests and 8 Playwright flows pass.
 - Lint, typecheck, production build, and `git diff --check` pass.
+- Render is live on the wallet-auth commit; the challenge endpoint returns the expected Vercel
+  domain and the removed public merchant-bootstrap endpoint returns 404.
+- Vercel merchant sign-in and dashboard return 200; Developers redirects unauthenticated users to
+  wallet sign-in.
 
 #### Risks
 
-- Production migration intentionally fails if legacy merchants share a wallet address; duplicates
-  must be resolved rather than silently merged.
 - Render's free service can cold-start slowly after inactivity.
 
 #### Follow-ups
 
-- Deploy and smoke-test Render and Vercel.
+- None.
