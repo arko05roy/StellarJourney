@@ -1,7 +1,6 @@
 import { notFound } from "next/navigation";
-import { loadDeployment } from "@paymap/contract-client";
 import { ApiError, fetchPublicCheckoutSession, type PublicCheckoutSession } from "@/lib/api";
-import { resolveNetwork } from "@/lib/network";
+import { resolveWebDeployment } from "@/lib/network";
 import { CheckoutPageClient } from "@/components/checkout/checkout-page-client";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -36,17 +35,24 @@ export default async function CheckoutSessionPage({ params }: CheckoutSessionPag
     );
   }
 
-  const deployment = loadDeployment(resolveNetwork());
+  const deployment = resolveWebDeployment();
   const nowUnixSeconds = String(Math.floor(Date.now() / 1000));
 
   return (
     <main className="mx-auto flex min-h-dvh max-w-lg flex-col justify-center px-6 py-12">
-      <CheckoutPageClient session={session} deployment={deployment} nowUnixSeconds={nowUnixSeconds} />
+      <CheckoutPageClient
+        session={session}
+        deployment={deployment}
+        nowUnixSeconds={nowUnixSeconds}
+      />
     </main>
   );
 }
 
-function nonPendingCopy(status: Exclude<PublicCheckoutSession["status"], "pending">): { title: string; body: string } {
+function nonPendingCopy(status: Exclude<PublicCheckoutSession["status"], "pending">): {
+  title: string;
+  body: string;
+} {
   switch (status) {
     case "completed":
       return {
@@ -67,14 +73,20 @@ function nonPendingCopy(status: Exclude<PublicCheckoutSession["status"], "pendin
 }
 
 function NonPendingNotice({ session }: { session: PublicCheckoutSession }) {
-  const entry = nonPendingCopy(session.status as Exclude<PublicCheckoutSession["status"], "pending">);
+  const entry = nonPendingCopy(
+    session.status as Exclude<PublicCheckoutSession["status"], "pending">,
+  );
 
   return (
     <Card data-testid="non-pending-notice">
       <CardContent className="flex flex-col gap-2 pt-6">
         <h1 className="text-base font-semibold text-foreground">{entry.title}</h1>
         <p className="text-sm text-muted-foreground">{entry.body}</p>
-        {session.mandateId ? <p className="mt-2 break-all font-mono text-xs text-muted-foreground">Automatic payment ID: {session.mandateId}</p> : null}
+        {session.mandateId ? (
+          <p className="mt-2 break-all font-mono text-xs text-muted-foreground">
+            Automatic payment ID: {session.mandateId}
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   );

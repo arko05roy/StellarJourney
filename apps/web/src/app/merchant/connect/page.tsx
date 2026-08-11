@@ -1,12 +1,11 @@
-import { loadDeployment } from "@paymap/contract-client";
 import { MerchantAuthPanel } from "@/components/merchant/merchant-auth-panel";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { resolveNetwork } from "@/lib/network";
+import { resolveWebDeployment } from "@/lib/network";
 
 export const dynamic = "force-dynamic";
 
 export default function MerchantConnectPage() {
-  const deployment = loadDeployment(resolveNetwork());
+  const deployment = resolveWebDeployment();
 
   return (
     <div className="mx-auto w-full max-w-lg py-10">
