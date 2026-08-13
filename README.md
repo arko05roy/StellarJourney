@@ -4,10 +4,6 @@ Recurring stablecoin payments with limits enforced by a Soroban contract. Payers
 
 ## Submission readiness
 
-> [!IMPORTANT]
-> The technical product evidence is ready. The submission is **not yet fully Level 4 or Level 5
-> compliant** because genuine user responses, the public demo video, and team review have not been
-> supplied. Controlled stress wallets are never counted as real users.
 
 | Item                           | Status        | Evidence                                                                                                                            |
 | ------------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
