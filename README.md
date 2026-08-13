@@ -6,7 +6,7 @@ Recurring stablecoin payments with limits enforced by a Soroban contract. Payers
 
 | Item                        | Evidence                                                                                             |
 | --------------------------- | ---------------------------------------------------------------------------------------------------- |
-| Public repository           | <https://github.com/SachPlayZ/Paymap>                                                                |
+| Public repository           | <https://github.com/arko05roy/Paymap>                                                                |
 | Live application            | <https://paymap-web.vercel.app>                                                                      |
 | Live API                    | <https://paymap-demo-api.onrender.com/readyz>                                                        |
 | Pitch deck                  | [Download the Paymap Level 5 pitch deck (PPTX)](docs/level-5/Paymap-Level-5-Pitch-Deck.pptx)         |
