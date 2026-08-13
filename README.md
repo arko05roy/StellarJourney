@@ -11,7 +11,7 @@ Recurring stablecoin payments with limits enforced by a Soroban contract. Payers
 
 | Item                           | Status        | Evidence                                                                                                                            |
 | ------------------------------ | ------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Public repository              | Ready         | <https://github.com/SachPlayZ/Paymap>                                                                                               |
+| Public repository              | Ready         | <https://github.com/arko05roy/Paymap>                                                                                               |
 | Meaningful commits             | Ready         | 38 commits before this audit; requirements are 15+ / 20+                                                                            |
 | Live application               | Ready         | <https://paymap-web.vercel.app>                                                                                                     |
 | Live API and monitoring        | Ready         | [Readiness](https://paymap-demo-api.onrender.com/readyz) · [Prometheus metrics](https://paymap-demo-api.onrender.com/metrics)       |
