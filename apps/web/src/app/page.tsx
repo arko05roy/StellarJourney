@@ -417,7 +417,7 @@ export default function HomePage() {
               <p>Non-custodial recurring payments on Stellar.</p>
               <a
                 className="inline-flex items-center gap-2 transition-colors hover:text-foreground"
-                href="https://github.com/SachPlayZ/Paymap"
+                href="https://github.com/arko05roy/Paymap"
                 rel="noreferrer"
                 target="_blank"
               >

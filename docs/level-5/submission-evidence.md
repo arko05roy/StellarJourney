@@ -23,7 +23,7 @@ review evidence is supplied.
 | Project structure and documentation       | Ready              | Monorepo workspaces, [`README.md`](../../README.md), architecture, operations, security, API docs                                      |
 | Contract on Stellar testnet               | Ready              | `CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22`                                                                             |
 | 15+ meaningful commits                    | Ready              | 38 commits existed before this audit                                                                                                   |
-| Public repository                         | Ready              | <https://github.com/SachPlayZ/Paymap>                                                                                                  |
+| Public repository                         | Ready              | <https://github.com/arko05roy/Paymap>                                                                                                  |
 | Live demo                                 | Ready              | <https://paymap-web.vercel.app>                                                                                                        |
 | Demo video                                | **Pending**        | [`demo-script.md`](../demo-script.md) is ready; public recording URL required                                                          |
 | Team review                               | **Pending**        | [`team-review.md`](../team-review.md) requires reviewer scores and sign-off                                                            |
@@ -48,7 +48,7 @@ review evidence is supplied.
 | Excel response export                                    | **Pending responses** | [`Paymap-User-Feedback-Analysis.xlsx`](Paymap-User-Feedback-Analysis.xlsx) is a validated template with 0 rows, not an export     |
 | README workbook link                                     | Ready                 | Workbook is linked with its template status disclosed                                                                             |
 | Next-phase improvement plan                              | Ready                 | README feedback plan                                                                                                              |
-| Feedback improvement commit link                         | **Pending feedback**  | Evidence workflow commit [`adf30fd`](https://github.com/SachPlayZ/Paymap/commit/adf30fd); product iteration commit still required |
+| Feedback improvement commit link                         | **Pending feedback**  | Evidence workflow commit [`adf30fd`](https://github.com/arko05roy/Paymap/commit/adf30fd); product iteration commit still required |
 | Analytics or transaction screenshots                     | Ready                 | Monitoring and successful transaction screenshots below                                                                           |
 | User feedback iteration summary                          | **Pending responses** | Do not infer themes before responses exist                                                                                        |
 
@@ -59,7 +59,7 @@ review evidence is supplied.
 | Advanced smart contract development   | Ready  | Bounded mandates, lifecycle, accounting, refunds, replay protection, property tests                                           |
 | Inter-contract communication          | Ready  | Mandate registry invokes the Stellar Asset Contract for `transfer_from` / `transfer`                                          |
 | Event streaming and real-time updates | Ready  | Durable Soroban `getEvents` indexer with cursor, deduplication, ordering, and retention-gap handling                          |
-| CI/CD pipeline                        | Ready  | [`ci.yml`](../../.github/workflows/ci.yml) · [green main run](https://github.com/SachPlayZ/Paymap/actions/runs/30534296778)   |
+| CI/CD pipeline                        | Ready  | [`ci.yml`](../../.github/workflows/ci.yml) · [green main run](https://github.com/arko05roy/Paymap/actions/runs/30534296778)   |
 | Smart-contract deployment workflow    | Ready  | [`deploy-testnet.ts`](../../scripts/deploy-testnet.ts) · [`testnet.json`](../../deployments/testnet.json)                     |
 | Mobile responsive frontend            | Ready  | [`product-ui-mobile.png`](evidence/product-ui-mobile.png)                                                                     |
 | Error handling and loading states     | Ready  | Typed contract/API errors, route boundaries, skeletons, pending controls, retries                                             |

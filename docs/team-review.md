@@ -10,7 +10,7 @@ reviewer must provide the score and sign-off.
 - Contract invariants: [`contract-invariants.md`](contract-invariants.md)
 - Threat model: [`threat-model.md`](threat-model.md)
 - Testnet evidence: [`level-5/submission-evidence.md`](level-5/submission-evidence.md)
-- CI: <https://github.com/SachPlayZ/Paymap/actions>
+- CI: <https://github.com/arko05roy/Paymap/actions>
 
 ## Review rubric
 

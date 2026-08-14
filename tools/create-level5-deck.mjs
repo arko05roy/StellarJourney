@@ -89,7 +89,7 @@ function card(slide, x, y, w, h, number, heading, body, accent = C.blue) {
   text(s, "BOUNDED\nAUTHORITY", 814, 474, 330, 62, 19, C.white, true, "center");
   footer(s, 1);
   notes(s, "Open with the user promise: recurring payments without surrendering wallet custody.", [
-    "https://github.com/SachPlayZ/Paymap",
+    "https://github.com/arko05roy/Paymap",
   ]);
 }
 
@@ -106,8 +106,8 @@ function card(slide, x, y, w, h, number, heading, body, accent = C.blue) {
   items.forEach(([n, h, b], i) => card(s, 72 + i * 378, 252, 350, 300, n, h, b, i === 1 ? C.amber : C.blue));
   footer(s, 2);
   notes(s, "Frame the product around a clear trust boundary, not a generic payments pitch.", [
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/threat-model.md",
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/contract-invariants.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/threat-model.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/contract-invariants.md",
   ]);
 }
 
@@ -125,8 +125,8 @@ function card(slide, x, y, w, h, number, heading, body, accent = C.blue) {
   data.forEach((d, i) => card(s, xs[i], 250, 344, 314, ...d, i === 2 ? C.green : C.blue));
   footer(s, 3);
   notes(s, "Walk through the three-step user model. Emphasize that the relayer has zero spending authority.", [
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/architecture.md",
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/security-checklist.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/architecture.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/security-checklist.md",
   ]);
 }
 
@@ -180,7 +180,7 @@ function card(slide, x, y, w, h, number, heading, body, accent = C.blue) {
   text(s, "Confirmed state", 992, 454, 190, 22, 12, C.blue, true, "center");
   footer(s, 5);
   notes(s, "Explain the request path, then the confirmed-chain reconciliation path. The API never invents payment state.", [
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/architecture.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/architecture.md",
     "https://developers.stellar.org/docs/networks",
   ]);
 }
@@ -207,9 +207,9 @@ function card(slide, x, y, w, h, number, heading, body, accent = C.blue) {
   text(s, "Testnet transaction hashes and E2E results are linked in the README.", 98, 536, 780, 22, 15, "#C7CCD6");
   footer(s, 6);
   notes(s, "Show the live application and repository evidence. Do not present 50-user growth as complete until genuine responses exist.", [
-    "https://github.com/SachPlayZ/Paymap",
+    "https://github.com/arko05roy/Paymap",
     "https://paymap-web.vercel.app",
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/demo-script.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/demo-script.md",
   ]);
 }
 
@@ -228,7 +228,7 @@ function card(slide, x, y, w, h, number, heading, body, accent = C.blue) {
   text(s, "Merchant pilots → shared checkout links → verified user cohorts → integration partners", 72, 544, 1106, 34, 18, C.ink, true);
   footer(s, 7);
   notes(s, "This is a focused go-to-market hypothesis, not a market-size claim. Validate segments through the Level 5 feedback cohort.", [
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/roadmap.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/roadmap.md",
   ]);
 }
 
@@ -251,8 +251,8 @@ function card(slide, x, y, w, h, number, heading, body, accent = C.blue) {
   });
   footer(s, 8);
   notes(s, "Describe the feedback loop: collect, analyze, prioritize, implement, verify, link the commit.", [
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/level-5/google-form-spec.md",
-    "https://github.com/SachPlayZ/Paymap/blob/main/docs/level-5/submission-evidence.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/level-5/google-form-spec.md",
+    "https://github.com/arko05roy/Paymap/blob/main/docs/level-5/submission-evidence.md",
   ]);
 }
 
@@ -265,12 +265,12 @@ function card(slide, x, y, w, h, number, heading, body, accent = C.blue) {
   text(s, "Live demo", 72, 458, 160, 22, 12, "#7FA7FF", true);
   text(s, "paymap-web.vercel.app", 72, 488, 500, 34, 22, C.white, true);
   text(s, "Repository", 684, 458, 160, 22, 12, "#7FA7FF", true);
-  text(s, "github.com/SachPlayZ/Paymap", 684, 488, 500, 34, 22, C.white, true);
+  text(s, "github.com/arko05roy/Paymap", 684, 488, 500, 34, 22, C.white, true);
   shape(s, "rect", 72, 618, 1136, 2, "#31343C");
   text(s, "Built on Stellar · Testnet evidence linked in README", 72, 644, 600, 22, 13, "#AFB5C1");
   notes(s, "End with the live product. Then run the demo flow from the walkthrough script.", [
     "https://paymap-web.vercel.app",
-    "https://github.com/SachPlayZ/Paymap",
+    "https://github.com/arko05roy/Paymap",
   ]);
 }
 
