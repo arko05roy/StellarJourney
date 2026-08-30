@@ -10,7 +10,22 @@ Recurring stablecoin payments with spending limits enforced by a Soroban smart c
 - Stellar testnet contract: [`CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22`](https://stellar.expert/explorer/testnet/contract/CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22)
 - Testnet `charge` transaction: [86b09bb3…20528c](https://stellar.expert/explorer/testnet/tx/86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c)
 - Demo video: [Watch the Stellar Mandates walkthrough on YouTube](https://youtu.be/5_rGrUrfUCE)
+- Pitch deck: [Download the Level 5 pitch deck](docs/level-5/Paymap-Level-5-Pitch-Deck.pptx)
 - Repository: [github.com/arko05roy/StellarJourney](https://github.com/arko05roy/StellarJourney)
+
+## Level 5 Evidence
+
+| Requirement | Evidence |
+| --- | --- |
+| Live dApp | [Open Paymap](https://paymap-web.vercel.app) |
+| Testnet contract | [View contract on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22) |
+| User feedback form | [Open Google Form](https://forms.gle/8qhiiDJekxz6Pn3C6) |
+| Feedback responses | [View public response sheet](https://docs.google.com/spreadsheets/d/16OVPpeLTTKICT__gA0_O84uEQsNuI24gi4Dv0eCn8oc/edit?usp=sharing) · [Download Excel export](docs/level-5/Paymap-User-Feedback-Analysis.xlsx) |
+| Pitch deck | [Download Level 5 pitch deck](docs/level-5/Paymap-Level-5-Pitch-Deck.pptx) |
+| Demo video | [Watch product walkthrough](https://youtu.be/5_rGrUrfUCE) |
+| Transaction activity | [View transaction evidence](docs/level-5/evidence/testnet-stress-20260730045306-585217.csv) |
+| Screenshots | [View product and monitoring evidence](docs/level-5/evidence/README.md) |
+| Full submission audit | [Read submission evidence](docs/level-5/submission-evidence.md) |
 
 ## Submission readiness
 
@@ -21,7 +36,7 @@ Recurring stablecoin payments with spending limits enforced by a Soroban smart c
 | Live API and monitoring | Ready | [Readiness](https://paymap-demo-api.onrender.com/readyz) · [Metrics](https://paymap-demo-api.onrender.com/metrics) |
 | Testnet contract | Ready | [Contract on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CCK2CG2DOZ7II4DTTNABU54F3OFMMJRKNABXLPTWINKXPWNMS2Q3XR22) |
 | Contract interaction | Ready | [Successful `charge` transaction](https://stellar.expert/explorer/testnet/tx/86b09bb3febcef33ed26c7d7a85a2d91a62b2f80048347e365df6c93ca20528c) |
-| CI/CD | Ready | [Green `main` workflow](https://github.com/arko05roy/Paymap/actions/runs/30534296778) |
+| CI/CD | Ready | [View GitHub Actions](https://github.com/arko05roy/StellarJourney/actions) |
 | Testnet activity | Ready | [52 verified transactions](docs/level-5/evidence/testnet-stress-20260730045306-585217.csv) |
 | User feedback | Ready | [Google Form](https://forms.gle/8qhiiDJekxz6Pn3C6) · [public feedback spreadsheet](https://docs.google.com/spreadsheets/d/16OVPpeLTTKICT__gA0_O84uEQsNuI24gi4Dv0eCn8oc/edit?usp=sharing) |
 | Demo video | Ready | [Watch the walkthrough on YouTube](https://youtu.be/5_rGrUrfUCE) |
@@ -31,7 +46,8 @@ The complete technical and submission matrix is in [`docs/level-5/submission-evi
 ## User feedback and improvements
 
 - Feedback form: [Paymap Testnet User Feedback](https://forms.gle/8qhiiDJekxz6Pn3C6)
-- Public Excel/Google Sheets export: [paymap-feedback](https://docs.google.com/spreadsheets/d/16OVPpeLTTKICT__gA0_O84uEQsNuI24gi4Dv0eCn8oc/edit?usp=sharing)
+- Public response sheet: [paymap-feedback](https://docs.google.com/spreadsheets/d/16OVPpeLTTKICT__gA0_O84uEQsNuI24gi4Dv0eCn8oc/edit?usp=sharing)
+- Excel export: [Paymap-User-Feedback-Analysis.xlsx](docs/level-5/Paymap-User-Feedback-Analysis.xlsx)
 
 The public sheet contains 50 submitted feedback entries. Wallet addresses are supplied by respondents; the sheet does not include transaction hashes, so this table records product-feedback participation and should not be treated as independently verified on-chain interaction proof.
 
