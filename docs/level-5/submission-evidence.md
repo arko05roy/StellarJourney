@@ -1,10 +1,10 @@
 # Paymap Submission Evidence
 
-Audit date: 2026-07-30.
+Audit date: 2026-08-30.
 
 Current verdict: the technical product, deployments, contract, CI/CD, tests, deck, and screenshots
-are ready. Level 4 and Level 5 are **not fully cleared** until genuine user, feedback, video, and
-review evidence is supplied.
+are ready. Public feedback, its export, the demo video, and a feedback-driven product iteration
+are now linked below. On-chain interaction verification and team review remain outstanding.
 
 ## Level 4
 
@@ -14,9 +14,9 @@ review evidence is supplied.
 | Stable frontend and contract architecture | Ready              | [`architecture.md`](../architecture.md) · [`contract-invariants.md`](../contract-invariants.md)                                        |
 | Mobile responsive UI                      | Ready              | [`product-ui-mobile.png`](evidence/product-ui-mobile.png)                                                                              |
 | Loading states and error handling         | Ready              | Route `loading.tsx` / `error.tsx`, checkout state machine, dashboard skeletons, typed error tests                                      |
-| Minimum 10 real users                     | **Pending**        | Requires 10 genuine respondents with verified wallet interactions                                                                      |
-| Wallet-interaction proof                  | **Pending cohort** | Technical transactions exist, but controlled wallets do not prove real users                                                           |
-| Basic user feedback collection            | **Pending**        | Form specification is ready; Google Form and responses are not                                                                         |
+| Minimum 10 real users                     | Submitted feedback | [50 public feedback entries](https://docs.google.com/spreadsheets/d/16OVPpeLTTKICT__gA0_O84uEQsNuI24gi4Dv0eCn8oc/edit?usp=sharing); transaction hashes still need verification |
+| Wallet-interaction proof                  | **Pending verification** | Respondents supplied wallet addresses, but the export does not include transaction hashes                                              |
+| Basic user feedback collection            | Ready              | [Google Form](https://forms.gle/8qhiiDJekxz6Pn3C6) · [public response sheet](https://docs.google.com/spreadsheets/d/16OVPpeLTTKICT__gA0_O84uEQsNuI24gi4Dv0eCn8oc/edit?usp=sharing) |
 | Production deployment                     | Ready              | Vercel frontend and Render API/relayer                                                                                                 |
 | Monitoring and analytics integration      | Ready              | [Live Prometheus endpoint](https://paymap-demo-api.onrender.com/metrics) · [`monitoring-metrics.png`](evidence/monitoring-metrics.png) |
 | Optimized UX                              | Ready technically  | Responsive landing page, wallet-first merchant onboarding, retry/loading/error states                                                  |
@@ -25,7 +25,7 @@ review evidence is supplied.
 | 15+ meaningful commits                    | Ready              | 38 commits existed before this audit                                                                                                   |
 | Public repository                         | Ready              | <https://github.com/arko05roy/Paymap>                                                                                                  |
 | Live demo                                 | Ready              | <https://paymap-web.vercel.app>                                                                                                        |
-| Demo video                                | **Pending**        | [`demo-script.md`](../demo-script.md) is ready; public recording URL required                                                          |
+| Demo video                                | Ready              | [Public walkthrough on YouTube](https://youtu.be/5_rGrUrfUCE)                                                                         |
 | Team review                               | **Pending**        | [`team-review.md`](../team-review.md) requires reviewer scores and sign-off                                                            |
 | Required screenshots                      | Ready              | Product, mobile, monitoring, CI, tests, and transaction screenshots below                                                              |
 
@@ -33,24 +33,24 @@ review evidence is supplied.
 
 | Requirement                                              | Status                | Evidence                                                                                                                          |
 | -------------------------------------------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| Minimum 50 testnet users                                 | **Pending**           | Workbook currently reports 0; controlled stress accounts are excluded                                                             |
+| Minimum 50 testnet users                                 | Submitted feedback     | [50 public feedback entries](https://docs.google.com/spreadsheets/d/16OVPpeLTTKICT__gA0_O84uEQsNuI24gi4Dv0eCn8oc/edit?usp=sharing); transaction verification remains outstanding |
 | Real transaction activity                                | Ready technically     | [`52-transaction CSV`](evidence/testnet-stress-20260730045306-585217.csv)                                                         |
 | Active real-user usage proof                             | **Pending**           | Each respondent must supply a wallet and successful testnet hash                                                                  |
-| Features based on user feedback                          | **Pending**           | Requires genuine responses before selecting an iteration                                                                          |
+| Features based on user feedback                          | Ready                 | [Merchant onboarding checklist](https://github.com/arko05roy/StellarJourney/commit/a1a6db125a6c8c8cb5e0eec05033b087f54a74cf) |
 | UX/UI and stability improvements                         | Ready                 | Landing redesign, wallet authentication, production-readiness, and CI repair commits                                              |
 | Optimized onboarding                                     | Ready technically     | Wallet ownership challenge precedes merchant setup; checkout has explicit recovery states                                         |
 | Professional pitch deck                                  | Ready                 | [`Paymap-Level-5-Pitch-Deck.pptx`](Paymap-Level-5-Pitch-Deck.pptx)                                                                |
 | Problem, solution, market, architecture, growth, roadmap | Ready                 | Slides 2, 3, 7, 5, 7, and 8 respectively                                                                                          |
-| Full product walkthrough video                           | **Pending**           | Record and publish [`demo-script.md`](../demo-script.md)                                                                          |
+| Full product walkthrough video                           | Ready                 | [Public walkthrough on YouTube](https://youtu.be/5_rGrUrfUCE)                                                                    |
 | 20+ meaningful commits                                   | Ready                 | 38 commits existed before this audit                                                                                              |
 | Updated documentation                                    | Ready                 | Root README and `docs/`                                                                                                           |
-| Google Form                                              | **Pending sign-in**   | Build from [`google-form-spec.md`](google-form-spec.md)                                                                           |
-| Excel response export                                    | **Pending responses** | [`Paymap-User-Feedback-Analysis.xlsx`](Paymap-User-Feedback-Analysis.xlsx) is a validated template with 0 rows, not an export     |
+| Google Form                                              | Ready                 | [Public Google Form](https://forms.gle/8qhiiDJekxz6Pn3C6)                                                                         |
+| Excel response export                                    | Ready                 | [Public Google Sheets export](https://docs.google.com/spreadsheets/d/16OVPpeLTTKICT__gA0_O84uEQsNuI24gi4Dv0eCn8oc/edit?usp=sharing) |
 | README workbook link                                     | Ready                 | Workbook is linked with its template status disclosed                                                                             |
 | Next-phase improvement plan                              | Ready                 | README feedback plan                                                                                                              |
-| Feedback improvement commit link                         | **Pending feedback**  | Evidence workflow commit [`adf30fd`](https://github.com/arko05roy/Paymap/commit/adf30fd); product iteration commit still required |
+| Feedback improvement commit link                         | Ready                 | [`a1a6db1`](https://github.com/arko05roy/StellarJourney/commit/a1a6db125a6c8c8cb5e0eec05033b087f54a74cf) adds the merchant onboarding checklist |
 | Analytics or transaction screenshots                     | Ready                 | Monitoring and successful transaction screenshots below                                                                           |
-| User feedback iteration summary                          | **Pending responses** | Do not infer themes before responses exist                                                                                        |
+| User feedback iteration summary                          | Ready                 | [README feedback summary](../../README.md#user-feedback-and-improvements)                                                         |
 
 ## Advanced technical requirements
 
@@ -80,20 +80,14 @@ review evidence is supplied.
 
 ## Genuine user evidence workflow
 
-1. Create the Google Form from [`google-form-spec.md`](google-form-spec.md).
-2. Have each tester complete a real product flow and submit their wallet plus transaction hash.
-3. Verify every hash in Horizon/Stellar Expert before counting that respondent.
-4. Export Google Forms responses to Excel; keep the raw export private.
-5. Copy genuine rows into the workbook and publish only a redacted export or aggregate screenshot.
-6. Group feedback, rank themes by frequency/severity, implement the top issue, and link its commit.
+1. Have each tester complete a real product flow and submit their wallet plus transaction hash.
+2. Verify every hash in Horizon/Stellar Expert before counting that respondent.
+3. Keep the public feedback export current while protecting participant privacy.
+4. Group feedback, rank themes by frequency/severity, implement the top issue, and link its commit.
 
 Never infer users from addresses or transaction counts. Keep names/emails private.
 
 ## Remaining external actions
 
-1. Sign in to Google and create/share the form.
-2. Onboard 10 genuine users for Level 4, then 50 for Level 5.
-3. Export and analyze their responses.
-4. Implement one feedback-driven improvement and add its commit link.
-5. Obtain team-review scores/sign-off.
-6. Record the 1–2 minute walkthrough, upload it, and add the public URL.
+1. Collect and verify one successful testnet transaction hash for each respondent before counting wallet interactions.
+2. Obtain team-review scores/sign-off.
